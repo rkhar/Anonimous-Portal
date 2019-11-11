@@ -78,16 +78,6 @@ val myMap =
 
 myMap.getOrElse("MI", "missing data")
 
-val c = 'a' //unicode for a
-val d = '\141' //octal for a
-val e = '\"'
-val f = '\\'
-
-println("%c".format(c))
-println("%c".format(d))
-println("%c".format(e))
-println("%c".format(f))
-
 val secondElement = List(1) match {
   case z :: y :: x :: xs ⇒ xs.headOption
   case _ ⇒ 0
@@ -125,10 +115,6 @@ val coordinates = for {
 coordinates(4)
 
 val nums = List(List(1), List(2), List(3), List(4), List(5))
-
-val g: Int = 31
-
-g toHexString
 
 val xs1 = Set(3, 2, 1, 4, 5, 6, 7)
 val ys1 = Set(7, 2, 1, 4, 5, 6, 3)
@@ -312,3 +298,8 @@ val i = 9.23E-9D
 
 val e = '\"'
 val f = '\\'
+
+val str = None
+str.getOrElse("es_port", "123.2.2.2")
+
+val sttr = ("es_port", "123.2.2.2")
