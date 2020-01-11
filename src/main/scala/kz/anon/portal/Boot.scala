@@ -4,8 +4,6 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.adapter._
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.HttpResponse
-import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import com.sksamuel.elastic4s.http.JavaClient
 import com.sksamuel.elastic4s.{ElasticClient, ElasticProperties}
@@ -14,16 +12,10 @@ import com.typesafe.config.ConfigFactory
 import kz.anon.portal.mainapi.MainApi
 import kz.anon.portal.service.AuthActor
 
+import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Success}
 
 object Boot {
-
-//  val indexName: String    = config.getString("elastic.indexes.users")
-//  val elasticHosts: String = config.getString("elastic.hosts")
-//  val elasticPorts: String = config.getString("elastic.ports")
-//  val elasticClient: ElasticClient = ElasticClient(
-//    JavaClient(ElasticProperties(s"http://$elasticHosts:$elasticPorts"))
-//  )
 
   private def startHttpServer(routes: Route, system: ActorSystem[_]): Unit = {
     implicit val classicSystem: akka.actor.ActorSystem = system.toClassic
@@ -41,9 +33,22 @@ object Boot {
   }
 
   def main(args: Array[String]): Unit = {
-    //#server-bootstrapping
+
+    //    ---------- ElasticSearch connection creation ----------
+
+    val config = ConfigFactory.load()
+
+    val indexName: String    = config.getString("elastic.indexes.users")
+    val elasticHosts: String = config.getString("elastic.hosts")
+    val elasticPorts: String = config.getString("elastic.ports")
+    val elasticClient: ElasticClient = ElasticClient(
+      JavaClient(ElasticProperties(s"http://$elasticHosts:$elasticPorts"))
+    )
+    //    ---------- ElasticSearch connection creation ----------
+
+    //    ---------- server-bootstrapping ----------
     val rootBehavior = Behaviors.setup[Nothing] { context =>
-      val authActor = context.spawn(AuthActor(Set.empty), "UserRegistryActor")
+      val authActor = context.spawn(AuthActor(elasticClient, indexName, context.system), "UserRegistryActor")
       context.watch(authActor)
 
       val routes = new MainApi(authActor)(context.system)
@@ -52,15 +57,12 @@ object Boot {
       Behaviors.empty
     }
     val system = ActorSystem[Nothing](rootBehavior, "HelloAkkaHttpServer")
-    //#server-bootstrapping
-  }
 
-//  if (!elasticClient
-//        .execute(indexExists(indexName))
-//        .await
-//        .result
-//        .isExists)
-//    elasticClient.execute(createIndex(indexName))
-//  else log.info(s"$indexName already exists")
+    //    ---------- server-bootstrapping ----------
+
+    if (!elasticClient.execute(indexExists(indexName)).await.result.isExists)
+      elasticClient.execute(createIndex(indexName))
+    else system.log.info(s"$indexName already exists")
+  }
 
 }

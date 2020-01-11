@@ -16,7 +16,7 @@
     <logger name="akka.cluster.ddata.Replicator" level="INFO"/>
 
     <root level="${LOG_LEVEL}">
-<!--    <root level="DEBUG">-->
+<!--    <root level="INFO">-->
         <appender-ref ref="STDOUT"/>
     </root>
 
