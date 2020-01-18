@@ -10,9 +10,9 @@ import com.sksamuel.elastic4s.{ElasticClient, ElasticProperties}
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.typesafe.config.ConfigFactory
 import kz.anon.portal.mainapi.MainApi
-import kz.anon.portal.service.AuthActor
+import kz.anon.portal.service.{ElasticFunctionality, MainActor}
 
-import scala.jdk.CollectionConverters._
+import scala.concurrent.ExecutionContextExecutor
 import scala.util.{Failure, Success}
 
 object Boot {
@@ -38,17 +38,24 @@ object Boot {
 
     val config = ConfigFactory.load()
 
-    val indexName: String    = config.getString("elastic.indexes.users")
-    val elasticHosts: String = config.getString("elastic.hosts")
-    val elasticPorts: String = config.getString("elastic.ports")
+    val usersIndex: String     = config.getString("elastic.indexes.users")
+    val documentsIndex: String = config.getString("elastic.indexes.users")
+    val elasticHosts: String   = config.getString("elastic.hosts")
+    val elasticPorts: String   = config.getString("elastic.ports")
     val elasticClient: ElasticClient = ElasticClient(
       JavaClient(ElasticProperties(s"http://$elasticHosts:$elasticPorts"))
     )
     //    ---------- ElasticSearch connection creation ----------
 
     //    ---------- server-bootstrapping ----------
+
     val rootBehavior = Behaviors.setup[Nothing] { context =>
-      val authActor = context.spawn(AuthActor(elasticClient, indexName, context.system), "UserRegistryActor")
+      implicit val executionContext: ExecutionContextExecutor = context.executionContext
+
+      val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex)
+
+      val authActor =
+        context.spawn(MainActor(elasticFuncs, elasticClient, usersIndex), "UserRegistryActor")
       context.watch(authActor)
 
       val routes = new MainApi(authActor)(context.system)
@@ -56,13 +63,17 @@ object Boot {
 
       Behaviors.empty
     }
-    val system = ActorSystem[Nothing](rootBehavior, "HelloAkkaHttpServer")
 
+    val system = ActorSystem[Nothing](rootBehavior, "LocalServer")
     //    ---------- server-bootstrapping ----------
 
-    if (!elasticClient.execute(indexExists(indexName)).await.result.isExists)
-      elasticClient.execute(createIndex(indexName))
-    else system.log.info(s"$indexName already exists")
+    if (!elasticClient.execute(indexExists(usersIndex)).await.result.isExists)
+      elasticClient.execute(createIndex(usersIndex))
+    else system.log.info(s"$usersIndex already exists")
+
+    if (!elasticClient.execute(indexExists(documentsIndex)).await.result.isExists)
+      elasticClient.execute(createIndex(documentsIndex))
+    else system.log.info(s"$documentsIndex already exists")
   }
 
 }
