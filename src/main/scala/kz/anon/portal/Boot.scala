@@ -39,7 +39,7 @@ object Boot {
     val config = ConfigFactory.load()
 
     val usersIndex: String     = config.getString("elastic.indexes.users")
-    val documentsIndex: String = config.getString("elastic.indexes.users")
+    val documentsIndex: String = config.getString("elastic.indexes.documents")
     val elasticHosts: String   = config.getString("elastic.hosts")
     val elasticPorts: String   = config.getString("elastic.ports")
     val elasticClient: ElasticClient = ElasticClient(

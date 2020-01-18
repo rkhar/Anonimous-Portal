@@ -1,55 +1,48 @@
 package kz.anon.portal.service
 
 import java.io.InputStream
-import java.nio.ByteBuffer
 import java.util.Base64
 
-import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
+import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
-import akka.http.scaladsl.model.StatusCode
 import com.sksamuel.elastic4s.ElasticClient
-import com.sksamuel.elastic4s.ElasticDsl._
-import javax.swing.text.DefaultEditorKit.BeepAction
 import kz.anon.portal.serializer.ElasticJson
 import kz.anon.portal.service.MainActor.{
   ActionPerformed,
   Command,
   CreateUser,
   DeleteUser,
+  Document,
   DocumentReceived,
   GetDocument,
   GetUser,
   PostDocument,
+  UpdateDocument,
+  UpdateUser,
   UserReceived
 }
 
 import scala.concurrent.ExecutionContextExecutor
-import scala.util.{Failure, Success}
 
 object MainActor {
 
   sealed trait Command
 
   final case class User(phoneNumber: String, password: String)
-
-  final case class Document(data: String)
+  final case class Document(id: String, data: String)
 
   final case class UserReceived(description: String, reply: Option[User])
-
   final case class DocumentReceived(description: String, reply: Option[Document])
 
-  final case class GetUser(id: String, replyTo: ActorRef[UserReceived]) extends Command
-
+  final case class GetUser(id: String, replyTo: ActorRef[UserReceived])       extends Command
   final case class CreateUser(user: User, replyTo: ActorRef[ActionPerformed]) extends Command
-
+  final case class UpdateUser(user: User, replyTo: ActorRef[ActionPerformed]) extends Command
   final case class DeleteUser(id: String, replyTo: ActorRef[ActionPerformed]) extends Command
 
-  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived]) extends Command
-
-  final case class PostDocument(id: String, inputStream: InputStream, replyTo: ActorRef[ActionPerformed])
-      extends Command
-
-  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed]) extends Command
+  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived])                    extends Command
+  final case class PostDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed])   extends Command
+  final case class UpdateDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed]) extends Command
+  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed])                  extends Command
 
   final case class ActionPerformed(statusCode: Int, description: String)
 
@@ -74,7 +67,7 @@ class MainActor(
           .getUser(id)
           .map(user => replyTo ! UserReceived("User successfully found!", user))
           .recover {
-            case e: Exception => replyTo ! UserReceived("User not found!", None)
+            case _: Exception => replyTo ! UserReceived("User not found!", None)
           }
 
         Behaviors.same
@@ -84,7 +77,16 @@ class MainActor(
           .createUser(user)
           .map(_ => replyTo ! ActionPerformed(201, "User successfully created!"))
           .recover {
-            case e: Exception => replyTo ! ActionPerformed(404, "User not found!")
+            case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+          }
+        Behaviors.same
+
+      case UpdateUser(user, replyTo) =>
+        elasticFuncs
+          .updateUser(user)
+          .map(_ => replyTo ! ActionPerformed(200, "User successfully updated!"))
+          .recover {
+            case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
           }
         Behaviors.same
 
@@ -93,7 +95,7 @@ class MainActor(
           .deleteUser(id)
           .map(_ => replyTo ! ActionPerformed(200, "User successfully deleted!"))
           .recover {
-            case e: Exception => replyTo ! ActionPerformed(404, "User not found!")
+            case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
           }
         Behaviors.same
 
@@ -102,22 +104,27 @@ class MainActor(
           .getDocument(id)
           .map(x => replyTo ! DocumentReceived("Document successfully received!", x))
           .recover {
-            case e: Exception => replyTo ! DocumentReceived("Document not found!", None)
+            case _: Exception => replyTo ! DocumentReceived("Document not found!", None)
           }
 
         Behaviors.same
 
       case PostDocument(id, inputStream, replyTo) =>
-        val arrayByte = LazyList.continually(inputStream.read()).takeWhile(_ != -1).map(_.toByte).toArray
-        val img       = Base64.getEncoder.encodeToString(arrayByte)
-
         elasticFuncs
-          .postDocument(id, img)
+          .postDocument(id, isToBase64Str(inputStream))
           .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
           .recover {
-            case e: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
           }
-        replyTo ! ActionPerformed(200, img)
+        Behaviors.same
+
+      case UpdateDocument(id, inputStream, replyTo) =>
+        elasticFuncs
+          .updateDocument(Document(id, isToBase64Str(inputStream)))
+          .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
+          .recover {
+            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+          }
         Behaviors.same
 
       case DeleteUser(id, replyTo) =>
@@ -125,9 +132,15 @@ class MainActor(
           .deleteDocument(id)
           .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
           .recover {
-            case e: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
           }
         Behaviors.same
     }
+
+  private def isToBase64Str(inputStream: InputStream): String = {
+    val arrayByte = LazyList.continually(inputStream.read()).takeWhile(_ != -1).map(_.toByte).toArray
+    Base64.getEncoder.encodeToString(arrayByte)
+
+  }
 
 }

@@ -16,8 +16,11 @@ import kz.anon.portal.service.MainActor.{
   CreateUser,
   DeleteDocument,
   DeleteUser,
+  DocumentReceived,
+  GetDocument,
   GetUser,
   PostDocument,
+  UpdateUser,
   User,
   UserReceived
 }
@@ -31,20 +34,15 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   implicit private val timeout: Timeout = Timeout.create(system.settings.config.getDuration("timeout"))
 
-  def getUser(id: String): Future[UserReceived] =
-    mainActor.ask(GetUser(id, _))
+  def getUser(id: String): Future[UserReceived]       = mainActor.ask(GetUser(id, _))
+  def createUser(user: User): Future[ActionPerformed] = mainActor.ask(CreateUser(user, _))
+  def updateUser(user: User): Future[ActionPerformed] = mainActor.ask(UpdateUser(user, _))
+  def deleteUser(id: String): Future[ActionPerformed] = mainActor.ask(DeleteUser(id, _))
 
-  def createUser(user: User): Future[ActionPerformed] =
-    mainActor.ask(CreateUser(user, _))
-
-  def deleteUser(id: String): Future[ActionPerformed] =
-    mainActor.ask(DeleteUser(id, _))
-
-  def postDocument(id: String, inputStream: InputStream): Future[ActionPerformed] =
-    mainActor.ask(PostDocument(id, inputStream, _))
-
-  def deleteDocument(id: String): Future[ActionPerformed] =
-    mainActor.ask(DeleteDocument(id, _))
+  def getDocument(id: String): Future[DocumentReceived]                    = mainActor.ask(GetDocument(id, _))
+  def postDocument(id: String, is: InputStream): Future[ActionPerformed]   = mainActor.ask(PostDocument(id, is, _))
+  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
+  def deleteDocument(id: String): Future[ActionPerformed]                  = mainActor.ask(DeleteDocument(id, _))
 
   val mainRoutes: Route = {
     concat(
@@ -64,6 +62,13 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
               }
             }
           },
+          put {
+            entity(as[User]) { user =>
+              onSuccess(updateUser(user)) { actionPerformed =>
+                complete(StatusCodes.Accepted, actionPerformed)
+              }
+            }
+          },
           delete {
             parameter("id") { id =>
               onSuccess(deleteUser(id)) { actionPerformed =>
@@ -75,12 +80,30 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       },
       pathPrefix("document") {
         concat(
+          get {
+            parameter("id") { id =>
+              onSuccess(getDocument(id)) { documentReceived =>
+                complete(StatusCodes.Accepted, documentReceived)
+              }
+            }
+          },
           post {
             parameter("id") { id =>
               fileUpload("filename") {
                 case (_, filestream) =>
                   val inputStream = filestream.runWith(StreamConverters.asInputStream())
                   onSuccess(postDocument(id, inputStream)) { actionPerformed =>
+                    complete(StatusCodes.Created, actionPerformed)
+                  }
+              }
+            }
+          },
+          put {
+            parameter("id") { id =>
+              fileUpload("filename") {
+                case (_, filestream) =>
+                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
+                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
                     complete(StatusCodes.Accepted, actionPerformed)
                   }
               }

@@ -4,6 +4,7 @@ import com.sksamuel.elastic4s.{ElasticClient, Response}
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.sksamuel.elastic4s.requests.delete.DeleteResponse
 import com.sksamuel.elastic4s.requests.indexes.IndexResponse
+import com.sksamuel.elastic4s.requests.update.UpdateResponse
 import kz.anon.portal.serializer.ElasticJson
 import kz.anon.portal.service.MainActor.{Document, User, UserReceived}
 import org.slf4j.LoggerFactory
@@ -35,6 +36,14 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
     }
   }
 
+  def updateUser(user: User): Future[Response[UpdateResponse]] = {
+    log.info(s"Updating user with id: ${user.phoneNumber}")
+
+    elasticClient.execute {
+      update(user.phoneNumber).in(usersIndex).doc("phoneNumber" -> user.phoneNumber, "password" -> user.password)
+    }
+  }
+
   def deleteUser(id: String): Future[Response[DeleteResponse]] = {
     log.info(s"Deleting user with id: $id")
 
@@ -59,6 +68,14 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
     elasticClient.execute {
       indexInto(documentsIndex).doc(document).id(id)
     }
+
+  def updateDocument(document: Document): Future[Response[UpdateResponse]] = {
+    log.info(s"Updating document with id: ${document.id}")
+
+    elasticClient.execute {
+      update(document.id).in(usersIndex).doc("data" -> document.data)
+    }
+  }
 
   def deleteDocument(id: String): Future[Response[DeleteResponse]] =
     elasticClient.execute {
