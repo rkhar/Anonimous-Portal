@@ -11,6 +11,7 @@ import kz.anon.portal.service.MainActor.{
   ActionPerformed,
   Command,
   CreateUser,
+  DeleteDocument,
   DeleteUser,
   Document,
   DocumentReceived,
@@ -127,7 +128,7 @@ class MainActor(
           }
         Behaviors.same
 
-      case DeleteUser(id, replyTo) =>
+      case DeleteDocument(id, replyTo) =>
         elasticFuncs
           .deleteDocument(id)
           .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
@@ -140,7 +141,5 @@ class MainActor(
   private def isToBase64Str(inputStream: InputStream): String = {
     val arrayByte = LazyList.continually(inputStream.read()).takeWhile(_ != -1).map(_.toByte).toArray
     Base64.getEncoder.encodeToString(arrayByte)
-
   }
-
 }

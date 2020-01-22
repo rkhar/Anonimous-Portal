@@ -7,6 +7,8 @@ import com.sksamuel.elastic4s.requests.indexes.IndexResponse
 import com.sksamuel.elastic4s.requests.update.UpdateResponse
 import kz.anon.portal.serializer.ElasticJson
 import kz.anon.portal.service.MainActor.{Document, User, UserReceived}
+
+import com.roundeights.hasher.Hasher
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -31,8 +33,10 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
   def createUser(user: User): Future[Response[IndexResponse]] = {
     log.info(s"Creating user with id: ${user.phoneNumber}")
 
+    val userWithHashedPass = user.copy(password = Hasher(user.password).sha256)
+
     elasticClient.execute {
-      indexInto(usersIndex).doc(user).id(user.phoneNumber)
+      indexInto(usersIndex).doc(userWithHashedPass).id(user.phoneNumber)
     }
   }
 
