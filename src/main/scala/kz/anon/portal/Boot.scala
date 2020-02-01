@@ -54,11 +54,11 @@ object Boot {
 
       val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex)
 
-      val authActor =
+      val mainActor =
         context.spawn(MainActor(elasticFuncs, elasticClient, usersIndex), "UserRegistryActor")
-      context.watch(authActor)
+      context.watch(mainActor)
 
-      val routes = new MainApi(authActor)(context.system)
+      val routes = new MainApi(mainActor)(context.system)
       startHttpServer(routes.mainRoutes, context.system)
 
       Behaviors.empty

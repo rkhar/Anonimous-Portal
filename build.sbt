@@ -24,5 +24,6 @@ libraryDependencies ++= Seq(
   "com.sksamuel.elastic4s" %% "elastic4s-client-esjava" % elastic4sVersion,
   "com.sksamuel.elastic4s" %% "elastic4s-http-streams"  % elastic4sVersion,
   "com.sksamuel.elastic4s" %% "elastic4s-testkit"       % elastic4sVersion % "test",
-  "com.outr"               %% "hasher"                  % "1.2.2"
+  "com.outr"               %% "hasher"                  % "1.2.2",
+  "com.pauldijou"          %% "jwt-json4s-jackson"      % "4.2.0"
 )

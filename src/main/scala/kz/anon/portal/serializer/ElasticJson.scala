@@ -1,7 +1,7 @@
 package kz.anon.portal.serializer
 
 import com.sksamuel.elastic4s.{Hit, HitReader, Indexable}
-import kz.anon.portal.service.MainActor.{Document, User}
+import kz.anon.portal.service.MainActor.{DocumentToSave, Files, User}
 import org.json4s.native.Serialization.write
 import org.json4s.native.JsonMethods.parse
 
@@ -17,11 +17,11 @@ trait ElasticJson extends Json4sSerializer {
     override def read(hit: Hit): Try[User] = Try(parse(hit.sourceAsString).extract[User])
   }
 
-  implicit object ReceivedDocumentIndexable extends Indexable[Document] {
-    override def json(t: Document): String = write(t)
+  implicit object ReceivedDocumentIndexable extends Indexable[DocumentToSave] {
+    override def json(t: DocumentToSave): String = write(t)
   }
 
-  implicit object DocumentHitReader extends HitReader[Document] {
-    override def read(hit: Hit): Try[Document] = Try(parse(hit.sourceAsString).extract[Document])
+  implicit object DocumentHitReader extends HitReader[DocumentToSave] {
+    override def read(hit: Hit): Try[DocumentToSave] = Try(parse(hit.sourceAsString).extract[DocumentToSave])
   }
 }

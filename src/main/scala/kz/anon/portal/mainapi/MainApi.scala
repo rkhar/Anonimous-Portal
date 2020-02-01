@@ -17,8 +17,10 @@ import kz.anon.portal.service.MainActor.{
   DeleteDocument,
   DeleteUser,
   DocumentReceived,
+  DocumentToReceive,
   GetDocument,
   GetUser,
+  Login,
   PostDocument,
   UpdateUser,
   User,
@@ -39,9 +41,21 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
   def updateUser(user: User): Future[ActionPerformed] = mainActor.ask(UpdateUser(user, _))
   def deleteUser(id: String): Future[ActionPerformed] = mainActor.ask(DeleteUser(id, _))
 
-  def getDocument(id: String): Future[DocumentReceived]                    = mainActor.ask(GetDocument(id, _))
-  def postDocument(id: String, is: InputStream): Future[ActionPerformed]   = mainActor.ask(PostDocument(id, is, _))
-  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
+  def login(phoneNumber: String, password: String): Future[ActionPerformed] =
+    mainActor.ask(Login(phoneNumber, password, _))
+
+  def getDocument(id: String): Future[DocumentReceived] = mainActor.ask(GetDocument(id, _))
+
+  def postDocument(
+      userId: String,
+      latLng: List[Double],
+      center: List[Double],
+      zoom: Int,
+      message: String,
+      categories: List[String],
+      files: Option[List[String]]
+  ): Future[ActionPerformed]                                               = mainActor.ask(PostDocument(userId, latLng, center, zoom, message, categories, files, _))
+//  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
   def deleteDocument(id: String): Future[ActionPerformed]                  = mainActor.ask(DeleteDocument(id, _))
 
   val mainRoutes: Route = {
@@ -78,6 +92,15 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
           }
         )
       },
+      pathPrefix("login") {
+        post {
+          entity(as[User]) { user =>
+            onSuccess(login(user.phoneNumber, user.password)) { actionPerformed =>
+              complete(StatusCodes.OK, actionPerformed)
+            }
+          }
+        }
+      },
       pathPrefix("document") {
         concat(
           get {
@@ -87,28 +110,38 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
               }
             }
           },
+//          post {
+//            parameter("id") { id =>
+//              fileUpload("filename") {
+//                case (_, filestream) =>
+//                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
+//                  onSuccess(postDocument(id, inputStream)) { actionPerformed =>
+//                    complete(StatusCodes.Created, actionPerformed)
+//                  }
+//              }
+//            }
+//          },
           post {
-            parameter("id") { id =>
-              fileUpload("filename") {
-                case (_, filestream) =>
-                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-                  onSuccess(postDocument(id, inputStream)) { actionPerformed =>
-                    complete(StatusCodes.Created, actionPerformed)
-                  }
+            entity(as[DocumentToReceive]) { doc =>
+              onSuccess(
+                postDocument(doc.userId, doc.latLng, doc.center, doc.zoom, doc.message, doc.categories, doc.files)
+              ) { actionPerformed =>
+                complete(StatusCodes.Created, actionPerformed)
               }
+
             }
           },
-          put {
-            parameter("id") { id =>
-              fileUpload("filename") {
-                case (_, filestream) =>
-                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
-                    complete(StatusCodes.Accepted, actionPerformed)
-                  }
-              }
-            }
-          },
+//          put {
+//            parameter("id") { id =>
+//              fileUpload("filename") {
+//                case (_, filestream) =>
+//                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
+//                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
+//                    complete(StatusCodes.Accepted, actionPerformed)
+//                  }
+//              }
+//            }
+//          },
           delete {
             parameter("id") { id =>
               onSuccess(deleteDocument(id)) { actionPerformed =>
