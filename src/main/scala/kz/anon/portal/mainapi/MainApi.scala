@@ -4,8 +4,8 @@ import java.io.InputStream
 
 import akka.actor.typed.{ActorRef, ActorSystem}
 import akka.actor.typed.scaladsl.AskPattern._
-import akka.http.scaladsl.model.StatusCodes
-import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.model.{HttpHeader, StatusCodes}
+import akka.http.scaladsl.server.{Directive1, Route}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.unmarshalling.PredefinedFromStringUnmarshallers
 import akka.stream.scaladsl.StreamConverters
@@ -22,7 +22,9 @@ import kz.anon.portal.service.MainActor.{
   GetUser,
   Login,
   PostDocument,
+  TokenResponse,
   UpdateUser,
+  UpdateUserModel,
   User,
   UserReceived
 }
@@ -36,13 +38,17 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   implicit private val timeout: Timeout = Timeout.create(system.settings.config.getDuration("timeout"))
 
-  def getUser(id: String): Future[UserReceived]       = mainActor.ask(GetUser(id, _))
-  def createUser(user: User): Future[ActionPerformed] = mainActor.ask(CreateUser(user, _))
-  def updateUser(user: User): Future[ActionPerformed] = mainActor.ask(UpdateUser(user, _))
-  def deleteUser(id: String): Future[ActionPerformed] = mainActor.ask(DeleteUser(id, _))
+  def getUser(headers: Map[String, String], id: String): Future[UserReceived] = mainActor.ask(GetUser(headers, id, _))
+  def createUser(user: User): Future[TokenResponse]                           = mainActor.ask(CreateUser(user, _))
 
-  def login(phoneNumber: String, password: String): Future[ActionPerformed] =
-    mainActor.ask(Login(phoneNumber, password, _))
+  def updateUser(headers: Map[String, String], id: String, password: String): Future[ActionPerformed] =
+    mainActor.ask(UpdateUser(headers, id, password, _))
+
+  def deleteUser(headers: Map[String, String], id: String): Future[ActionPerformed] =
+    mainActor.ask(DeleteUser(headers, id, _))
+
+  def login(privateName: String, password: String): Future[TokenResponse] =
+    mainActor.ask(Login(privateName, password, _))
 
   def getDocument(id: String): Future[DocumentReceived] = mainActor.ask(GetDocument(id, _))
 
@@ -54,17 +60,17 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       message: String,
       categories: List[String],
       files: Option[List[String]]
-  ): Future[ActionPerformed]                                               = mainActor.ask(PostDocument(userId, latLng, center, zoom, message, categories, files, _))
+  ): Future[ActionPerformed] = mainActor.ask(PostDocument(userId, latLng, center, zoom, message, categories, files, _))
 //  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
-  def deleteDocument(id: String): Future[ActionPerformed]                  = mainActor.ask(DeleteDocument(id, _))
+  def deleteDocument(id: String): Future[ActionPerformed] = mainActor.ask(DeleteDocument(id, _))
 
   val mainRoutes: Route = {
     concat(
       pathPrefix("auth") {
         concat(
-          get {
+          httpHeaders { headers =>
             parameter("id") { id =>
-              onSuccess(getUser(id)) { userReceived =>
+              onSuccess(getUser(headers, id)) { userReceived =>
                 complete(userReceived)
               }
             }
@@ -76,17 +82,22 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
               }
             }
           },
-          put {
-            entity(as[User]) { user =>
-              onSuccess(updateUser(user)) { actionPerformed =>
-                complete(StatusCodes.Accepted, actionPerformed)
+          httpHeaders { headers =>
+            put {
+              entity(as[UpdateUserModel]) { updateUserModel =>
+                onSuccess(updateUser(headers, updateUserModel.privateName, updateUserModel.password)) {
+                  actionPerformed =>
+                    complete(StatusCodes.Accepted, actionPerformed)
+                }
               }
             }
           },
-          delete {
-            parameter("id") { id =>
-              onSuccess(deleteUser(id)) { actionPerformed =>
-                complete(StatusCodes.Accepted, actionPerformed)
+          httpHeaders { headers =>
+            delete {
+              parameter("id") { id =>
+                onSuccess(deleteUser(headers, id)) { actionPerformed =>
+                  complete(StatusCodes.Accepted, actionPerformed)
+                }
               }
             }
           }
@@ -95,7 +106,7 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       pathPrefix("login") {
         post {
           entity(as[User]) { user =>
-            onSuccess(login(user.phoneNumber, user.password)) { actionPerformed =>
+            onSuccess(login(user.privateName, user.password)) { actionPerformed =>
               complete(StatusCodes.OK, actionPerformed)
             }
           }
@@ -155,4 +166,10 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   }
 
+  private def getHeaders(headers: Seq[HttpHeader]): Map[String, String] =
+    headers.map { x =>
+      (x.name, x.value)
+    }.toMap
+
+  private def httpHeaders: Directive1[Map[String, String]] = extract(c => getHeaders(c.request.headers))
 }

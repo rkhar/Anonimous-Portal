@@ -21,7 +21,7 @@ object Boot {
     implicit val classicSystem: akka.actor.ActorSystem = system.toClassic
     import system.executionContext
 
-    val futureBinding = Http().bindAndHandle(routes, "localhost", 8080)
+    val futureBinding = Http().bindAndHandle(routes, "0.0.0.0", 8080)
     futureBinding.onComplete {
       case Success(binding) =>
         val address = binding.localAddress
@@ -55,7 +55,7 @@ object Boot {
       val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex)
 
       val mainActor =
-        context.spawn(MainActor(elasticFuncs, elasticClient, usersIndex), "UserRegistryActor")
+        context.spawn(MainActor(elasticFuncs), "UserRegistryActor")
       context.watch(mainActor)
 
       val routes = new MainApi(mainActor)(context.system)

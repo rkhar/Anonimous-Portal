@@ -1,7 +1,7 @@
 package kz.anon.portal.serializer
 
 import com.sksamuel.elastic4s.{Hit, HitReader, Indexable}
-import kz.anon.portal.service.MainActor.{DocumentToSave, Files, User}
+import kz.anon.portal.service.MainActor.{DocumentToSave, User}
 import org.json4s.native.Serialization.write
 import org.json4s.native.JsonMethods.parse
 

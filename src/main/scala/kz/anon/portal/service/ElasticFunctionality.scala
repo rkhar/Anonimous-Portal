@@ -6,13 +6,12 @@ import com.sksamuel.elastic4s.requests.delete.DeleteResponse
 import com.sksamuel.elastic4s.requests.indexes.IndexResponse
 import com.sksamuel.elastic4s.requests.update.UpdateResponse
 import kz.anon.portal.serializer.ElasticJson
-import kz.anon.portal.service.MainActor.{DocumentToSave, User, UserReceived}
+import kz.anon.portal.service.MainActor.{DocumentToSave, User}
 import com.roundeights.hasher.Hasher
 import org.slf4j.LoggerFactory
 import java.util.UUID.randomUUID
 
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
 
 class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, documentsIndex: String)(
     implicit executionContext: ExecutionContext
@@ -20,7 +19,7 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
 
   private val log = LoggerFactory.getLogger("ElasticFuncs")
 
-  def getUser(id: String): Future[Option[User]] = {
+  def getUserById(id: String): Future[Option[User]] = {
     log.info("Getting user by its id")
 
     elasticClient.execute {
@@ -31,20 +30,20 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
   }
 
   def createUser(user: User): Future[Response[IndexResponse]] = {
-    log.info(s"Creating user with id: ${user.phoneNumber}")
+    log.info(s"Creating user with id: ${user.privateName}")
 
     val userWithHashedPass = user.copy(password = Hasher(user.password).sha256)
 
     elasticClient.execute {
-      indexInto(usersIndex).doc(userWithHashedPass).id(user.phoneNumber)
+      indexInto(usersIndex).doc(userWithHashedPass).id(user.privateName)
     }
   }
 
-  def updateUser(user: User): Future[Response[UpdateResponse]] = {
-    log.info(s"Updating user with id: ${user.phoneNumber}")
+  def updateUser(id: String, password: String): Future[Response[UpdateResponse]] = {
+    log.info(s"Updating user with id: $id")
 
     elasticClient.execute {
-      update(user.phoneNumber).in(usersIndex).doc("phoneNumber" -> user.phoneNumber, "password" -> user.password)
+      update(id).in(usersIndex).doc("password" -> password)
     }
   }
 
@@ -84,7 +83,7 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
   ): Future[Response[IndexResponse]] = {
 
     val docId = randomUUID.toString
-    val doc = DocumentToSave(userId, docId, latLng, center, zoom, message, categories, files)
+    val doc   = DocumentToSave(userId, docId, latLng, center, zoom, message, categories, files)
 
     elasticClient.execute {
       indexInto(documentsIndex).doc(doc).id(docId)
