@@ -14,40 +14,61 @@ import org.json4s._
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtJson4s}
 
 import scala.concurrent.ExecutionContextExecutor
+import scala.util.{Failure, Success}
 
 object MainActor {
 
   sealed trait Command
 
   final case class UpdateUserModel(privateName: String, password: String)
+
   final case class User(privateName: String, publicName: String = "Anonymous", password: String)
+
+  final case class Files(name: String, content: String)
 
   final case class DocumentToSave(
       userId: String,
+      publicName: String,
       docId: String,
       latLng: List[Double],
       center: List[Double],
       zoom: Int,
       message: String,
       categories: List[String],
-      files: Option[List[String]]
+      files: Option[List[Files]],
+      date: Long
   )
+
+  final case class ShortDocumentInfo(
+      docId: String,
+      publicName: String,
+      message: String,
+      categories: List[String],
+      date: Long
+  )
+
+  final case class DocsWithCount(count: Long, shortDocumentInfo: IndexedSeq[ShortDocumentInfo])
 
   final case class DocumentToReceive(
       userId: String,
+      publicName: String,
       latLng: List[Double],
       center: List[Double],
       zoom: Int,
       message: String,
       categories: List[String],
-      files: Option[List[String]]
+      files: Option[List[Files]]
   )
 
   final case class UserReceived(description: String, reply: Option[User])
+
   final case class DocumentReceived(description: String, reply: Option[DocumentToSave])
 
+  final case class DocumentsReceived(description: String, reply: Option[DocsWithCount])
+
   final case class GetUser(headers: Map[String, String], id: String, replyTo: ActorRef[UserReceived]) extends Command
-  final case class CreateUser(user: User, replyTo: ActorRef[TokenResponse])                           extends Command
+
+  final case class CreateUser(user: User, replyTo: ActorRef[TokenResponse]) extends Command
 
   final case class UpdateUser(
       headers: Map[String, String],
@@ -58,33 +79,41 @@ object MainActor {
 
   final case class DeleteUser(headers: Map[String, String], id: String, replyTo: ActorRef[ActionPerformed])
       extends Command
+
   final case class Login(privateNumber: String, password: String, replyTo: ActorRef[TokenResponse]) extends Command
 
   final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived]) extends Command
-  final case class Files(name: String, content: String)
+
+  final case class GetAllDocuments(start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived]) extends Command
+
+  final case class GetUsersDocuments(id: String, start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived])
+      extends Command
 
   final case class PostDocument(
       userId: String,
+      publicName: String,
       latLng: List[Double],
       center: List[Double],
       zoom: Int,
       message: String,
       categories: List[String],
-      files: Option[List[String]],
+      files: Option[List[Files]],
       replyTo: ActorRef[ActionPerformed]
   ) extends Command
-//  final case class PostDocument(
-//                                 email: Option[String] = Some("anonymous"),
-//                                 latLng: Double,
-//                                 center: Double,
-//                                 zoom: Int,
-//                                 message: String,
-//                                 files: List[],
-//                                   is: InputStream,
-//  replyTo: ActorRef[ActionPerformed]
-//  ) extends Command
+
+  //  final case class PostDocument(
+  //                                 email: Option[String] = Some("anonymous"),
+  //                                 latLng: Double,
+  //                                 center: Double,
+  //                                 zoom: Int,
+  //                                 message: String,
+  //                                 files: List[],
+  //                                   is: InputStream,
+  //  replyTo: ActorRef[ActionPerformed]
+  //  ) extends Command
   final case class UpdateDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed]) extends Command
-  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed])                  extends Command
+
+  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed]) extends Command
 
   final case class ActionPerformed(statusCode: Int, description: String)
 
@@ -115,21 +144,17 @@ class MainActor(
             .getUserById(id)
             .map {
               case Some(value) =>
-                context.log.info(s"User successfully found!: $value")
                 replyTo ! UserReceived("User successfully found!", Some(value))
               case None =>
-                context.log.info(s"User not found!")
                 replyTo ! UserReceived("User not found!", None)
             }
             .recover {
               case exception: Exception =>
-                context.log.error(s"exception: $exception")
                 replyTo ! UserReceived("User not found!", None)
 
             }
         } else {
-          context.log.info(s"User not found!")
-          replyTo ! UserReceived("User not found!", None)
+          replyTo ! UserReceived("Invalid Token!", None)
         }
 
         Behaviors.same
@@ -177,8 +202,7 @@ class MainActor(
               replyTo ! ActionPerformed(404, "User not found!")
           }
         } else {
-          context.log.info(s"User not found!")
-          replyTo ! ActionPerformed(404, "User not found!")
+          replyTo ! ActionPerformed(403, "Invalid Token!")
         }
 
         Behaviors.same
@@ -192,8 +216,7 @@ class MainActor(
               case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
             }
         } else {
-          context.log.info(s"User not found!")
-          replyTo ! ActionPerformed(404, "User not found!")
+          replyTo ! ActionPerformed(403, "Invalid Token!")
         }
 
         Behaviors.same
@@ -236,20 +259,66 @@ class MainActor(
 
         Behaviors.same
 
-//      case PostDocument(id, inputStream, replyTo) =>
-//        elasticFuncs
-//          .postDocument(id, isToBase64Str(inputStream))
-//          .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
-//          .recover {
-//            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
-//          }
-//        Behaviors.same
+      case GetAllDocuments(start, limit, replyTo) =>
+        elasticFuncs
+          .getAllDocuments(start, limit)
+          .map {
+            case Some(value) =>
+              elasticFuncs.countAllDocuments.onComplete {
+                case Success(count) =>
+                  val pages = count / (limit - start) + 1
+                  val docsWithCount = DocsWithCount(pages, value)
+                  replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
+                case Failure(exception) =>
+                  replyTo ! DocumentsReceived("Documents not found!", None)
+              }
+            case None =>
+              replyTo ! DocumentsReceived("Documents not found!", None)
 
-      case PostDocument(userId, latLng, center, zoom, message, categories, files, replyTo) =>
+          }
+          .recover {
+            case _: Exception => replyTo ! DocumentsReceived("Documents not found!", None)
+          }
+
+        Behaviors.same
+
+      case GetUsersDocuments(id, start, limit, replyTo) =>
+        elasticFuncs
+          .getUsersDocuments(id, start, limit)
+          .map {
+            case Some(value) =>
+              elasticFuncs.countUsersDocuments(id).onComplete {
+                case Success(count) =>
+                  val pages = count / (limit - start) + 1
+                  val docsWithCount = DocsWithCount(pages, value)
+                  replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
+                case Failure(exception) =>
+                  replyTo ! DocumentsReceived("Documents not found!", None)
+              }
+            case None =>
+              replyTo ! DocumentsReceived("Documents not found!", None)
+          }
+          .recover {
+            case _: Exception => replyTo ! DocumentsReceived("Documents not found!", None)
+          }
+
+        Behaviors.same
+
+      //      case PostDocument(id, inputStream, replyTo) =>
+      //        elasticFuncs
+      //          .postDocument(id, isToBase64Str(inputStream))
+      //          .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
+      //          .recover {
+      //            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+      //          }
+      //        Behaviors.same
+
+      case PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, replyTo) =>
         elasticFuncs.getUserById(userId).map {
           case Some(_) =>
+            val date = DateTime.now.getMillis
             elasticFuncs
-              .postDocument(userId, latLng, center, zoom, message, categories, files)
+              .postDocument(userId, publicName, latLng, center, zoom, message, categories, files, date)
               .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
               .recover {
                 case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
@@ -260,14 +329,14 @@ class MainActor(
 
         Behaviors.same
 
-//      case UpdateDocument(id, inputStream, replyTo) =>
-//        elasticFuncs
-//          .updateDocument(Document(id, isToBase64Str(inputStream)))
-//          .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
-//          .recover {
-//            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
-//          }
-//        Behaviors.same
+      //      case UpdateDocument(id, inputStream, replyTo) =>
+      //        elasticFuncs
+      //          .updateDocument(Document(id, isToBase64Str(inputStream)))
+      //          .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
+      //          .recover {
+      //            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+      //          }
+      //        Behaviors.same
 
       case DeleteDocument(id, replyTo) =>
         elasticFuncs
@@ -293,9 +362,10 @@ class MainActor(
   }
 
   def checkToken(headers: Map[String, String]): Boolean = {
-    val token     = headers.getOrElse("Authorization", "").split(" ")(1)
-    val key       = "secretKey"
-    val algorithm = JwtAlgorithm.HS256
+    val bearerToken = headers.getOrElse("Authorization", "")
+    val token       = if (bearerToken.nonEmpty) bearerToken.split(" ")(1) else ""
+    val key         = "secretKey"
+    val algorithm   = JwtAlgorithm.HS256
     Jwt.decode(token, key, Seq(algorithm)).isSuccess
   }
 

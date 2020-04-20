@@ -18,8 +18,12 @@ import kz.anon.portal.service.MainActor.{
   DeleteUser,
   DocumentReceived,
   DocumentToReceive,
+  DocumentsReceived,
+  Files,
+  GetAllDocuments,
   GetDocument,
   GetUser,
+  GetUsersDocuments,
   Login,
   PostDocument,
   TokenResponse,
@@ -39,7 +43,8 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
   implicit private val timeout: Timeout = Timeout.create(system.settings.config.getDuration("timeout"))
 
   def getUser(headers: Map[String, String], id: String): Future[UserReceived] = mainActor.ask(GetUser(headers, id, _))
-  def createUser(user: User): Future[TokenResponse]                           = mainActor.ask(CreateUser(user, _))
+
+  def createUser(user: User): Future[TokenResponse] = mainActor.ask(CreateUser(user, _))
 
   def updateUser(headers: Map[String, String], id: String, password: String): Future[ActionPerformed] =
     mainActor.ask(UpdateUser(headers, id, password, _))
@@ -52,16 +57,25 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   def getDocument(id: String): Future[DocumentReceived] = mainActor.ask(GetDocument(id, _))
 
+  def getAllDocuments(start: Int, limit: Int): Future[DocumentsReceived] =
+    mainActor.ask(GetAllDocuments(start, limit, _))
+
+  def getUsersDocuments(id: String, start: Int, limit: Int): Future[DocumentsReceived] =
+    mainActor.ask(GetUsersDocuments(id, start, limit, _))
+
   def postDocument(
       userId: String,
+      publicName: String,
       latLng: List[Double],
       center: List[Double],
       zoom: Int,
       message: String,
       categories: List[String],
-      files: Option[List[String]]
-  ): Future[ActionPerformed] = mainActor.ask(PostDocument(userId, latLng, center, zoom, message, categories, files, _))
-//  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
+      files: Option[List[Files]]
+  ): Future[ActionPerformed] =
+    mainActor.ask(PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, _))
+
+  //  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
   def deleteDocument(id: String): Future[ActionPerformed] = mainActor.ask(DeleteDocument(id, _))
 
   val mainRoutes: Route = {
@@ -114,45 +128,72 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       },
       pathPrefix("document") {
         concat(
-          get {
-            parameter("id") { id =>
-              onSuccess(getDocument(id)) { documentReceived =>
-                complete(StatusCodes.Accepted, documentReceived)
+          pathPrefix("single") {
+            get {
+              parameter("id") { id =>
+                onSuccess(getDocument(id)) { documentReceived =>
+                  complete(StatusCodes.Accepted, documentReceived)
+                }
               }
             }
           },
-//          post {
-//            parameter("id") { id =>
-//              fileUpload("filename") {
-//                case (_, filestream) =>
-//                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-//                  onSuccess(postDocument(id, inputStream)) { actionPerformed =>
-//                    complete(StatusCodes.Created, actionPerformed)
-//                  }
-//              }
-//            }
-//          },
+          pathPrefix("all") {
+            get {
+              parameters("start".as[Int], "limit".as[Int]) { (start, limit) =>
+                onSuccess(getAllDocuments(start, limit)) { documentsReceived =>
+                  complete(StatusCodes.Accepted, documentsReceived)
+                }
+              }
+            }
+          },
+          pathPrefix("user") {
+            parameters("privateName".as[String], "start".as[Int], "limit".as[Int]) { (id, start, limit) =>
+              get {
+                onSuccess(getUsersDocuments(id, start, limit)) { documentsReceived =>
+                  complete(StatusCodes.Accepted, documentsReceived)
+                }
+              }
+            }
+          },
+          //          post {
+          //            parameter("id") { id =>
+          //              fileUpload("filename") {
+          //                case (_, filestream) =>
+          //                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
+          //                  onSuccess(postDocument(id, inputStream)) { actionPerformed =>
+          //                    complete(StatusCodes.Created, actionPerformed)
+          //                  }
+          //              }
+          //            }
+          //          },
           post {
             entity(as[DocumentToReceive]) { doc =>
               onSuccess(
-                postDocument(doc.userId, doc.latLng, doc.center, doc.zoom, doc.message, doc.categories, doc.files)
+                postDocument(doc.userId,
+                             doc.publicName,
+                             doc.latLng,
+                             doc.center,
+                             doc.zoom,
+                             doc.message,
+                             doc.categories,
+                             doc.files)
               ) { actionPerformed =>
                 complete(StatusCodes.Created, actionPerformed)
               }
 
             }
           },
-//          put {
-//            parameter("id") { id =>
-//              fileUpload("filename") {
-//                case (_, filestream) =>
-//                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-//                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
-//                    complete(StatusCodes.Accepted, actionPerformed)
-//                  }
-//              }
-//            }
-//          },
+          //          put {
+          //            parameter("id") { id =>
+          //              fileUpload("filename") {
+          //                case (_, filestream) =>
+          //                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
+          //                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
+          //                    complete(StatusCodes.Accepted, actionPerformed)
+          //                  }
+          //              }
+          //            }
+          //          },
           delete {
             parameter("id") { id =>
               onSuccess(deleteDocument(id)) { actionPerformed =>
