@@ -21,9 +21,7 @@ object MainActor {
   sealed trait Command
 
   final case class UpdateUserModel(privateName: String, password: String)
-
   final case class User(privateName: String, publicName: String = "Anonymous", password: String)
-
   final case class Files(name: String, content: String)
 
   final case class DocumentToSave(
@@ -48,6 +46,7 @@ object MainActor {
   )
 
   final case class DocsWithCount(count: Long, shortDocumentInfo: IndexedSeq[ShortDocumentInfo])
+  final case class CommentsWithCount(count: Long, comments: IndexedSeq[CommentToSave])
 
   final case class DocumentToReceive(
       userId: String,
@@ -59,16 +58,23 @@ object MainActor {
       categories: List[String],
       files: Option[List[Files]]
   )
+  final case class Comment(docId: String, commentator: String, text: String)
+  final case class CommentToSave(commentID: String, docId: String, commentator: String, text: String, date: Long)
+
+  final case class TokenResponse(
+      statusCode: Int,
+      description: String,
+      jwtToken: Option[String] = None,
+      publicName: Option[String] = None
+  )
 
   final case class UserReceived(description: String, reply: Option[User])
-
   final case class DocumentReceived(description: String, reply: Option[DocumentToSave])
-
+  final case class CommentReceived(description: String, reply: Option[CommentToSave])
   final case class DocumentsReceived(description: String, reply: Option[DocsWithCount])
-
+  final case class CommentsReceived(description: String, reply: Option[CommentsWithCount])
   final case class GetUser(headers: Map[String, String], id: String, replyTo: ActorRef[UserReceived]) extends Command
-
-  final case class CreateUser(user: User, replyTo: ActorRef[TokenResponse]) extends Command
+  final case class CreateUser(user: User, replyTo: ActorRef[TokenResponse])                           extends Command
 
   final case class UpdateUser(
       headers: Map[String, String],
@@ -79,12 +85,9 @@ object MainActor {
 
   final case class DeleteUser(headers: Map[String, String], id: String, replyTo: ActorRef[ActionPerformed])
       extends Command
-
   final case class Login(privateNumber: String, password: String, replyTo: ActorRef[TokenResponse]) extends Command
-
-  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived]) extends Command
-
-  final case class GetAllDocuments(start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived]) extends Command
+  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived])                     extends Command
+  final case class GetAllDocuments(start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived])    extends Command
 
   final case class GetUsersDocuments(id: String, start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived])
       extends Command
@@ -101,28 +104,19 @@ object MainActor {
       replyTo: ActorRef[ActionPerformed]
   ) extends Command
 
-  //  final case class PostDocument(
-  //                                 email: Option[String] = Some("anonymous"),
-  //                                 latLng: Double,
-  //                                 center: Double,
-  //                                 zoom: Int,
-  //                                 message: String,
-  //                                 files: List[],
-  //                                   is: InputStream,
-  //  replyTo: ActorRef[ActionPerformed]
-  //  ) extends Command
   final case class UpdateDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed]) extends Command
+  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed])                  extends Command
 
-  final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed]) extends Command
+  final case class PostComment(docId: String, commentator: String, text: String, replyTo: ActorRef[ActionPerformed])
+      extends Command
+  final case class GetComment(commentId: String, replyTo: ActorRef[CommentReceived]) extends Command
 
+  final case class GetDocumentComments(docId: String, start: Int, limit: Int, replyTo: ActorRef[CommentsReceived])
+      extends Command
+
+  final case class GetUserComments(userId: String, start: Int, limit: Int, replyTo: ActorRef[CommentsReceived])
+      extends Command
   final case class ActionPerformed(statusCode: Int, description: String)
-
-  final case class TokenResponse(
-      statusCode: Int,
-      description: String,
-      jwtToken: Option[String] = None,
-      publicName: Option[String] = None
-  )
 
   def apply(elasticFuncs: ElasticFunctionality): Behavior[Command] =
     Behaviors.setup(context => new MainActor(context, elasticFuncs))
@@ -141,7 +135,7 @@ class MainActor(
       case GetUser(headers, id, replyTo) =>
         if (checkToken(headers)) {
           elasticFuncs
-            .getUserById(id)
+            .getUserByPrivateName(id)
             .map {
               case Some(value) =>
                 replyTo ! UserReceived("User successfully found!", Some(value))
@@ -149,7 +143,7 @@ class MainActor(
                 replyTo ! UserReceived("User not found!", None)
             }
             .recover {
-              case exception: Exception =>
+              case _: Exception =>
                 replyTo ! UserReceived("User not found!", None)
 
             }
@@ -161,11 +155,10 @@ class MainActor(
 
       case CreateUser(user, replyTo) =>
         elasticFuncs
-          .getUserById(user.privateName)
-          .map {
-            case Some(_) =>
-              replyTo ! TokenResponse(201, "User already exists")
-            case None =>
+          .ifUserExists(user.privateName)
+          .map { res =>
+            if (res) replyTo ! TokenResponse(201, "User already exists")
+            else {
               val hashedUser = user.copy(publicName = Hasher(user.privateName + DateTime.now.toString).sha256.hash)
               elasticFuncs
                 .createUser(hashedUser)
@@ -179,18 +172,18 @@ class MainActor(
                 .recover {
                   case _: Exception => replyTo ! TokenResponse(404, "User can not be created!")
                 }
+            }
           }
           .recover {
-            case _: Exception =>
-              replyTo ! TokenResponse(404, "User not found!")
+            case _: Exception => replyTo ! TokenResponse(404, "User can not be created!")
           }
 
         Behaviors.same
 
       case UpdateUser(headers, id, password, replyTo) =>
         if (checkToken(headers)) {
-          elasticFuncs.getUserById(id).map {
-            case Some(_) =>
+          elasticFuncs.ifUserExists(id).map { res =>
+            if (res) {
               val hashedPassword = Hasher(password).sha256.hash
               elasticFuncs
                 .updateUser(id, hashedPassword)
@@ -198,7 +191,7 @@ class MainActor(
                 .recover {
                   case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
                 }
-            case None =>
+            } else
               replyTo ! ActionPerformed(404, "User not found!")
           }
         } else {
@@ -225,7 +218,7 @@ class MainActor(
         val userWithHashedPass = Hasher(password).sha256.hash
 
         elasticFuncs
-          .getUserById(privateName)
+          .getUserByPrivateName(privateName)
           .map {
             case Some(value) =>
               if (value.password == userWithHashedPass.toString)
@@ -249,7 +242,8 @@ class MainActor(
           .getDocument(docId)
           .map {
             case Some(value) =>
-              replyTo ! DocumentReceived("Document successfully received!", Some(value))
+              val anonDoc = value.copy(userId = "Anonymous")
+              replyTo ! DocumentReceived("Document successfully received!", Some(anonDoc))
             case None =>
               replyTo ! DocumentReceived("Document not found!", None)
           }
@@ -266,10 +260,10 @@ class MainActor(
             case Some(value) =>
               elasticFuncs.countAllDocuments.onComplete {
                 case Success(count) =>
-                  val pages = count / (limit - start) + 1
+                  val pages         = count / (limit - start) + 1
                   val docsWithCount = DocsWithCount(pages, value)
                   replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
-                case Failure(exception) =>
+                case Failure(_) =>
                   replyTo ! DocumentsReceived("Documents not found!", None)
               }
             case None =>
@@ -289,10 +283,10 @@ class MainActor(
             case Some(value) =>
               elasticFuncs.countUsersDocuments(id).onComplete {
                 case Success(count) =>
-                  val pages = count / (limit - start) + 1
+                  val pages         = count / (limit - start) + 1
                   val docsWithCount = DocsWithCount(pages, value)
                   replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
-                case Failure(exception) =>
+                case Failure(_) =>
                   replyTo ! DocumentsReceived("Documents not found!", None)
               }
             case None =>
@@ -304,18 +298,9 @@ class MainActor(
 
         Behaviors.same
 
-      //      case PostDocument(id, inputStream, replyTo) =>
-      //        elasticFuncs
-      //          .postDocument(id, isToBase64Str(inputStream))
-      //          .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
-      //          .recover {
-      //            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
-      //          }
-      //        Behaviors.same
-
       case PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, replyTo) =>
-        elasticFuncs.getUserById(userId).map {
-          case Some(_) =>
+        elasticFuncs.ifUserExists(userId).map { res =>
+          if (res) {
             val date = DateTime.now.getMillis
             elasticFuncs
               .postDocument(userId, publicName, latLng, center, zoom, message, categories, files, date)
@@ -323,20 +308,11 @@ class MainActor(
               .recover {
                 case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
               }
-          case None =>
+          } else
             replyTo ! ActionPerformed(404, "User not found!")
         }
 
         Behaviors.same
-
-      //      case UpdateDocument(id, inputStream, replyTo) =>
-      //        elasticFuncs
-      //          .updateDocument(Document(id, isToBase64Str(inputStream)))
-      //          .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
-      //          .recover {
-      //            case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
-      //          }
-      //        Behaviors.same
 
       case DeleteDocument(id, replyTo) =>
         elasticFuncs
@@ -344,6 +320,91 @@ class MainActor(
           .map(_ => replyTo ! ActionPerformed(200, "Document has posted!"))
           .recover {
             case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+          }
+
+        Behaviors.same
+
+      case PostComment(docId, commentator, text, replyTo) =>
+        elasticFuncs.ifUserExists(commentator).map { userRes =>
+          if (userRes) {
+            elasticFuncs
+              .ifDocExists(docId)
+              .map { docRes =>
+                if (docRes) {
+                  val date = DateTime.now.getMillis
+                  elasticFuncs
+                    .postComment(docId, commentator, text, date)
+                    .map(_ => replyTo ! ActionPerformed(200, "Comment was posted!"))
+                    .recover {
+                      case _: Exception => replyTo ! ActionPerformed(404, "Comment is invalid!")
+                    }
+                } else
+                  replyTo ! ActionPerformed(404, "Document not found!")
+              }
+              .recover {
+                case _: Exception => replyTo ! ActionPerformed(404, "Document not found!")
+              }
+          } else
+            replyTo ! ActionPerformed(404, "User not found!")
+        }
+
+        Behaviors.same
+
+      case GetComment(commentId, replyTo) =>
+        elasticFuncs
+          .getComment(commentId)
+          .map {
+            case Some(value) =>
+              replyTo ! CommentReceived("Comment successfully received!", Some(value))
+            case None =>
+              replyTo ! CommentReceived("Comment not found!", None)
+          }
+          .recover {
+            case _: Exception => replyTo ! CommentReceived("Comment not found!", None)
+          }
+
+        Behaviors.same
+
+      case GetDocumentComments(docId, start, limit, replyTo) =>
+        elasticFuncs
+          .getDocumentComments(docId, start, limit)
+          .map {
+            case Some(value) =>
+              elasticFuncs.countDocumentComments(docId).onComplete {
+                case Success(count) =>
+                  val pages             = count / (limit - start) + 1
+                  val commentsWithCount = CommentsWithCount(pages, value)
+                  replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
+                case Failure(_) =>
+                  replyTo ! CommentsReceived("Comments not found!", None)
+              }
+            case None =>
+              replyTo ! CommentsReceived("Comments not found!", None)
+          }
+          .recover {
+            case _: Exception => replyTo ! CommentsReceived("Comments not found!", None)
+          }
+
+        Behaviors.same
+
+      case GetUserComments(userId, start, limit, replyTo) =>
+        elasticFuncs
+          .getUsersComments(userId, start, limit)
+          .map {
+            case Some(value) =>
+              elasticFuncs.countUsersComments(userId).onComplete {
+                case Success(count) =>
+                  val pages             = count / (limit - start) + 1
+                  val commentsWithCount = CommentsWithCount(pages, value)
+                  replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
+                case Failure(_) =>
+                  replyTo ! CommentsReceived("Comments not found!", None)
+              }
+            case None =>
+              replyTo ! CommentsReceived("Comments not found!", None)
+          }
+          .recover {
+            case _: Exception => replyTo ! CommentsReceived("Comments not found!", None)
           }
 
         Behaviors.same

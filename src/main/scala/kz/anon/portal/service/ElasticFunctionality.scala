@@ -2,32 +2,67 @@ package kz.anon.portal.service
 
 import com.sksamuel.elastic4s.{ElasticClient, Response}
 import com.sksamuel.elastic4s.ElasticDsl._
-import com.sksamuel.elastic4s.requests.count.CountApi
 import com.sksamuel.elastic4s.requests.delete.DeleteResponse
 import com.sksamuel.elastic4s.requests.indexes.IndexResponse
 import com.sksamuel.elastic4s.requests.update.UpdateResponse
 import kz.anon.portal.serializer.ElasticJson
-import kz.anon.portal.service.MainActor.{DocumentToSave, Files, ShortDocumentInfo, User}
+import kz.anon.portal.service.MainActor.{CommentToSave, DocumentToSave, Files, ShortDocumentInfo, User}
 import com.roundeights.hasher.Hasher
 import org.slf4j.LoggerFactory
 import java.util.UUID.randomUUID
 
-import com.sksamuel.elastic4s.requests.cat.CatCountResponse
-
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
 
-class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, documentsIndex: String)(
+class ElasticFunctionality(
+    elasticClient: ElasticClient,
+    usersIndex: String,
+    documentsIndex: String,
+    commentsIndex: String
+)(
     implicit executionContext: ExecutionContext
 ) extends ElasticJson {
 
   private val log = LoggerFactory.getLogger("ElasticFuncs")
 
-  def getUserById(id: String): Future[Option[User]] = {
-    log.info("Getting user by its id")
+  def ifUserExists(id: String): Future[Boolean] = {
+    log.info("Checking if user exists")
+
+    elasticClient.execute {
+      exists(id, usersIndex)
+    }.map(_.result)
+  }
+
+  def ifDocExists(docId: String): Future[Boolean] = {
+    log.info("Checking if document exists")
+
+    elasticClient.execute {
+      exists(docId, documentsIndex)
+    }.map(_.result)
+  }
+
+  def ifCommentExists(commentId: String): Future[Boolean] = {
+    log.info("Checking if comment exists")
+
+    elasticClient.execute {
+      exists(commentId, commentsIndex)
+    }.map(_.result)
+  }
+
+  def getUserByPrivateName(id: String): Future[Option[User]] = {
+    log.info("Getting user by its privateName")
 
     elasticClient.execute {
       search(usersIndex).query(idsQuery(id))
+    }.map { x =>
+      x.map(response => response.to[User])
+    }.map(_.toOption).map(z => z.flatMap(_.headOption))
+  }
+
+  def getUserByPublicName(id: String): Future[Option[User]] = {
+    log.info("Getting user by its id")
+
+    elasticClient.execute {
+      search(usersIndex).query(termsQuery("publicName", id))
     }.map { x =>
       x.map(response => response.to[User])
     }.map(_.toOption).map(z => z.flatMap(_.headOption))
@@ -101,7 +136,6 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
     elasticClient.execute {
       count(documentsIndex)
     }.map(x => x.result.count)
-//    Future(4l)
   }
 
   def countUsersDocuments(id: String): Future[Long] = {
@@ -110,14 +144,7 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
     elasticClient.execute {
       count(documentsIndex).query(idsQuery(id))
     }.map(x => x.result.count)
-
-//    Future(4l)
   }
-
-  //  def postDocument(id: String, document: String): Future[Response[IndexResponse]] =
-  //    elasticClient.execute {
-  //      indexInto(documentsIndex).doc(document).id(id)
-  //    }
 
   def postDocument(
       userId: String,
@@ -152,4 +179,67 @@ class ElasticFunctionality(elasticClient: ElasticClient, usersIndex: String, doc
     elasticClient.execute {
       deleteById(documentsIndex, id)
     }
+
+  def postComment(docId: String, commentator: String, text: String, date: Long): Future[Response[IndexResponse]] = {
+    log.info(s"Posting comment from commentator: $commentator")
+
+    val commentId = randomUUID.toString
+    val comment   = CommentToSave(commentId, docId, commentator, text, date)
+
+    elasticClient.execute {
+      indexInto(commentsIndex).doc(comment).id(commentId)
+    }
+  }
+
+  def countDocumentComments(docId: String): Future[Long] = {
+    log.info("Getting all docs comments count")
+
+    elasticClient.execute {
+      count(commentsIndex).query(termQuery("docId", docId))
+    }.map(x => x.result.count)
+  }
+
+  def countUsersComments(id: String): Future[Long] = {
+    log.info(s"Getting all $id users comments count")
+
+    elasticClient.execute {
+      count(commentsIndex).query(termQuery("commentator", id))
+    }.map(x => x.result.count)
+  }
+
+  def getComment(commentId: String): Future[Option[CommentToSave]] = {
+    log.info(s"Getting comment with id: $commentId")
+
+    elasticClient.execute {
+      search(commentsIndex).query(idsQuery(commentId))
+    }.map { x =>
+      x.map(
+        response => response.to[CommentToSave]
+      )
+    }.map(_.toOption).map(z => z.flatMap(_.headOption))
+  }
+
+  def getDocumentComments(docId: String, start: Int, limit: Int): Future[Option[IndexedSeq[CommentToSave]]] = {
+    log.info(s"Getting from $start to $limit number of comments of document with docId: $docId")
+
+    elasticClient.execute {
+      search(commentsIndex).start(start).limit(limit).query(termQuery("docId.keyword", docId))
+    }.map { x =>
+      x.map(
+        response => response.to[CommentToSave]
+      )
+    }.map(_.toOption)
+  }
+
+  def getUsersComments(id: String, start: Int, limit: Int): Future[Option[IndexedSeq[CommentToSave]]] = {
+    log.info(s"Getting from $start to $limit number of user's comments")
+
+    elasticClient.execute {
+      search(commentsIndex).start(start).limit(limit).query(termQuery("commentator.keyword", id))
+    }.map { x =>
+      x.map(
+        response => response.to[CommentToSave]
+      )
+    }.map(_.toOption)
+  }
 }

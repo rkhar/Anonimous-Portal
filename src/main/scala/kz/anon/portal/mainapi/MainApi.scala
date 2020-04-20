@@ -1,37 +1,14 @@
 package kz.anon.portal.mainapi
 
-import java.io.InputStream
-
 import akka.actor.typed.{ActorRef, ActorSystem}
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.http.scaladsl.model.{HttpHeader, StatusCodes}
 import akka.http.scaladsl.server.{Directive1, Route}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.unmarshalling.PredefinedFromStringUnmarshallers
-import akka.stream.scaladsl.StreamConverters
 import akka.util.Timeout
 import kz.anon.portal.service.MainActor
-import kz.anon.portal.service.MainActor.{
-  ActionPerformed,
-  CreateUser,
-  DeleteDocument,
-  DeleteUser,
-  DocumentReceived,
-  DocumentToReceive,
-  DocumentsReceived,
-  Files,
-  GetAllDocuments,
-  GetDocument,
-  GetUser,
-  GetUsersDocuments,
-  Login,
-  PostDocument,
-  TokenResponse,
-  UpdateUser,
-  UpdateUserModel,
-  User,
-  UserReceived
-}
+import kz.anon.portal.service.MainActor._
 import kz.anon.portal.serializer.Json4sSerializer
 
 import scala.concurrent.Future
@@ -43,8 +20,7 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
   implicit private val timeout: Timeout = Timeout.create(system.settings.config.getDuration("timeout"))
 
   def getUser(headers: Map[String, String], id: String): Future[UserReceived] = mainActor.ask(GetUser(headers, id, _))
-
-  def createUser(user: User): Future[TokenResponse] = mainActor.ask(CreateUser(user, _))
+  def createUser(user: User): Future[TokenResponse]                           = mainActor.ask(CreateUser(user, _))
 
   def updateUser(headers: Map[String, String], id: String, password: String): Future[ActionPerformed] =
     mainActor.ask(UpdateUser(headers, id, password, _))
@@ -54,7 +30,6 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   def login(privateName: String, password: String): Future[TokenResponse] =
     mainActor.ask(Login(privateName, password, _))
-
   def getDocument(id: String): Future[DocumentReceived] = mainActor.ask(GetDocument(id, _))
 
   def getAllDocuments(start: Int, limit: Int): Future[DocumentsReceived] =
@@ -74,9 +49,18 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       files: Option[List[Files]]
   ): Future[ActionPerformed] =
     mainActor.ask(PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, _))
-
   //  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
   def deleteDocument(id: String): Future[ActionPerformed] = mainActor.ask(DeleteDocument(id, _))
+
+  def postComment(docId: String, commentator: String, text: String): Future[ActionPerformed] =
+    mainActor.ask(PostComment(docId, commentator, text, _))
+  def getComment(commentId: String): Future[CommentReceived] = mainActor.ask(GetComment(commentId, _))
+
+  def getDocumentComments(docId: String, start: Int, limit: Int): Future[CommentsReceived] =
+    mainActor.ask(GetDocumentComments(docId, start, limit, _))
+
+  def getUserComments(userId: String, start: Int, limit: Int): Future[CommentsReceived] =
+    mainActor.ask(GetUserComments(userId, start, limit, _))
 
   val mainRoutes: Route = {
     concat(
@@ -155,17 +139,6 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
               }
             }
           },
-          //          post {
-          //            parameter("id") { id =>
-          //              fileUpload("filename") {
-          //                case (_, filestream) =>
-          //                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-          //                  onSuccess(postDocument(id, inputStream)) { actionPerformed =>
-          //                    complete(StatusCodes.Created, actionPerformed)
-          //                  }
-          //              }
-          //            }
-          //          },
           post {
             entity(as[DocumentToReceive]) { doc =>
               onSuccess(
@@ -183,21 +156,48 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
             }
           },
-          //          put {
-          //            parameter("id") { id =>
-          //              fileUpload("filename") {
-          //                case (_, filestream) =>
-          //                  val inputStream = filestream.runWith(StreamConverters.asInputStream())
-          //                  onSuccess(updateDocument(id, inputStream)) { actionPerformed =>
-          //                    complete(StatusCodes.Accepted, actionPerformed)
-          //                  }
-          //              }
-          //            }
-          //          },
           delete {
             parameter("id") { id =>
               onSuccess(deleteDocument(id)) { actionPerformed =>
                 complete(StatusCodes.Accepted, actionPerformed)
+              }
+            }
+          }
+        )
+      },
+      pathPrefix("feedback") {
+        concat(
+          pathPrefix("single") {
+            get {
+              parameter("commentId".as[String]) { commentId =>
+                onSuccess(getComment(commentId)) { actionPerformed =>
+                  complete(StatusCodes.OK, actionPerformed)
+                }
+              }
+            }
+          },
+          pathPrefix("document") {
+            get {
+              parameter("docId".as[String], "start".as[Int], "limit".as[Int]) { (docId, start, limit) =>
+                onSuccess(getDocumentComments(docId, start, limit)) { actionPerformed =>
+                  complete(StatusCodes.OK, actionPerformed)
+                }
+              }
+            }
+          },
+          pathPrefix("user") {
+            get {
+              parameter("userId".as[String], "start".as[Int], "limit".as[Int]) { (userId, start, limit) =>
+                onSuccess(getUserComments(userId, start, limit)) { actionPerformed =>
+                  complete(StatusCodes.OK, actionPerformed)
+                }
+              }
+            }
+          },
+          post {
+            entity(as[Comment]) { comment =>
+              onSuccess(postComment(comment.docId, comment.commentator, comment.text)) { actionPerformed =>
+                complete(StatusCodes.OK, actionPerformed)
               }
             }
           }

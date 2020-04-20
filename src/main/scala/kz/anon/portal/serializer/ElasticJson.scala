@@ -1,7 +1,7 @@
 package kz.anon.portal.serializer
 
 import com.sksamuel.elastic4s.{Hit, HitReader, Indexable}
-import kz.anon.portal.service.MainActor.{DocsWithCount, DocumentToSave, ShortDocumentInfo, User}
+import kz.anon.portal.service.MainActor.{CommentToSave, DocumentToSave, ShortDocumentInfo, User}
 import org.json4s.native.Serialization.write
 import org.json4s.native.JsonMethods.parse
 
@@ -33,12 +33,12 @@ trait ElasticJson extends Json4sSerializer {
     override def read(hit: Hit): Try[ShortDocumentInfo] = Try(parse(hit.sourceAsString).extract[ShortDocumentInfo])
   }
 
-//  implicit object ReceivedDocsWithCountIndexable extends Indexable[DocsWithCount] {
-//    override def json(t: DocsWithCount): String = write(t)
-//  }
-//
-//  implicit object DocsWithCountHitReader extends HitReader[DocsWithCount] {
-//    override def read(hit: Hit): Try[DocsWithCount] = Try(parse(hit.sourceAsString).extract[DocsWithCount])
-//  }
+  implicit object ReceivedCommentIndexable extends Indexable[CommentToSave] {
+    override def json(t: CommentToSave): String = write(t)
+  }
+
+  implicit object CommentHitReader extends HitReader[CommentToSave] {
+    override def read(hit: Hit): Try[CommentToSave] = Try(parse(hit.sourceAsString).extract[CommentToSave])
+  }
 
 }

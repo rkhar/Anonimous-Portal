@@ -40,6 +40,7 @@ object Boot {
 
     val usersIndex: String     = config.getString("elastic.indexes.users")
     val documentsIndex: String = config.getString("elastic.indexes.documents")
+    val commentsIndex: String  = config.getString("elastic.indexes.comments")
     val elasticHosts: String   = config.getString("elastic.hosts")
     val elasticPorts: String   = config.getString("elastic.ports")
     val elasticClient: ElasticClient = ElasticClient(
@@ -52,7 +53,7 @@ object Boot {
     val rootBehavior = Behaviors.setup[Nothing] { context =>
       implicit val executionContext: ExecutionContextExecutor = context.executionContext
 
-      val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex)
+      val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex, commentsIndex)
 
       val mainActor =
         context.spawn(MainActor(elasticFuncs), "UserRegistryActor")
@@ -74,6 +75,10 @@ object Boot {
     if (!elasticClient.execute(indexExists(documentsIndex)).await.result.isExists)
       elasticClient.execute(createIndex(documentsIndex))
     else system.log.info(s"$documentsIndex already exists")
+
+    if (!elasticClient.execute(indexExists(commentsIndex)).await.result.isExists)
+      elasticClient.execute(createIndex(commentsIndex))
+    else system.log.info(s"$commentsIndex already exists")
   }
 
 }
