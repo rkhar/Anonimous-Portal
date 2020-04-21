@@ -122,7 +122,7 @@ class ElasticFunctionality(
     log.info(s"Getting from $start to $limit number of user's documents")
 
     elasticClient.execute {
-      search(documentsIndex).start(start).limit(limit).query(termQuery("userId", id))
+      search(documentsIndex).start(start).limit(limit).query(termQuery("userId.keyword", id))
     }.map { x =>
       x.map(
         response => response.to[ShortDocumentInfo]
@@ -149,18 +149,19 @@ class ElasticFunctionality(
   def postDocument(
       userId: String,
       publicName: String,
+      docId: String,
       latLng: List[Double],
       center: List[Double],
       zoom: Int,
       message: String,
       categories: List[String],
       files: Option[List[Files]],
+      isNumberNeeded: Option[Boolean],
       date: Long
   ): Future[Response[IndexResponse]] = {
     log.info(s"Posting document to userId: $userId")
 
-    val docId = randomUUID.toString
-    val doc   = DocumentToSave(userId, publicName, docId, latLng, center, zoom, message, categories, files, date)
+    val doc   = DocumentToSave(userId, publicName, docId, latLng, center, zoom, message, categories, files, isNumberNeeded, date)
 
     elasticClient.execute {
       indexInto(documentsIndex).doc(doc).id(docId)
@@ -180,11 +181,11 @@ class ElasticFunctionality(
       deleteById(documentsIndex, id)
     }
 
-  def postComment(docId: String, commentator: String, text: String, date: Long): Future[Response[IndexResponse]] = {
+  def postComment(docId: String, commentator: String, publicName: String, text: String, date: Long): Future[Response[IndexResponse]] = {
     log.info(s"Posting comment from commentator: $commentator")
 
     val commentId = randomUUID.toString
-    val comment   = CommentToSave(commentId, docId, commentator, text, date)
+    val comment   = CommentToSave(commentId, docId, commentator, publicName, text, date)
 
     elasticClient.execute {
       indexInto(commentsIndex).doc(comment).id(commentId)
@@ -195,7 +196,7 @@ class ElasticFunctionality(
     log.info("Getting all docs comments count")
 
     elasticClient.execute {
-      count(commentsIndex).query(termQuery("docId", docId))
+      count(commentsIndex).query(termQuery("docId.keyword", docId))
     }.map(x => x.result.count)
   }
 
@@ -203,7 +204,7 @@ class ElasticFunctionality(
     log.info(s"Getting all $id users comments count")
 
     elasticClient.execute {
-      count(commentsIndex).query(termQuery("commentator", id))
+      count(commentsIndex).query(termQuery("commentator.keyword", id))
     }.map(x => x.result.count)
   }
 

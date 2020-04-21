@@ -52,8 +52,8 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
   //  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
   def deleteDocument(id: String): Future[ActionPerformed] = mainActor.ask(DeleteDocument(id, _))
 
-  def postComment(docId: String, commentator: String, text: String): Future[ActionPerformed] =
-    mainActor.ask(PostComment(docId, commentator, text, _))
+  def postComment(docId: String, commentator: String, publicName: String, text: String): Future[ActionPerformed] =
+    mainActor.ask(PostComment(docId, commentator, publicName, text, _))
   def getComment(commentId: String): Future[CommentReceived] = mainActor.ask(GetComment(commentId, _))
 
   def getDocumentComments(docId: String, start: Int, limit: Int): Future[CommentsReceived] =
@@ -196,7 +196,7 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
           },
           post {
             entity(as[Comment]) { comment =>
-              onSuccess(postComment(comment.docId, comment.commentator, comment.text)) { actionPerformed =>
+              onSuccess(postComment(comment.docId, comment.userId, comment.publicName, comment.text)) { actionPerformed =>
                 complete(StatusCodes.OK, actionPerformed)
               }
             }

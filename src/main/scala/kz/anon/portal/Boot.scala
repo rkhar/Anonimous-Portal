@@ -10,17 +10,16 @@ import com.sksamuel.elastic4s.{ElasticClient, ElasticProperties}
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.typesafe.config.ConfigFactory
 import kz.anon.portal.mainapi.MainApi
-import kz.anon.portal.service.{ElasticFunctionality, MainActor}
+import kz.anon.portal.service.{ElasticFunctionality, HttpClient, MainActor}
 
 import scala.concurrent.ExecutionContextExecutor
 import scala.util.{Failure, Success}
 
 object Boot {
 
-  private def startHttpServer(routes: Route, system: ActorSystem[_]): Unit = {
-    implicit val classicSystem: akka.actor.ActorSystem = system.toClassic
-    import system.executionContext
-
+  private def startHttpServer(
+      routes: Route
+  )(implicit system: akka.actor.ActorSystem, executionContext: ExecutionContextExecutor): Unit = {
     val futureBinding = Http().bindAndHandle(routes, "0.0.0.0", 8080)
     futureBinding.onComplete {
       case Success(binding) =>
@@ -43,6 +42,7 @@ object Boot {
     val commentsIndex: String  = config.getString("elastic.indexes.comments")
     val elasticHosts: String   = config.getString("elastic.hosts")
     val elasticPorts: String   = config.getString("elastic.ports")
+    val externalUri: String    = config.getString("uri")
     val elasticClient: ElasticClient = ElasticClient(
       JavaClient(ElasticProperties(s"http://$elasticHosts:$elasticPorts"))
     )
@@ -52,15 +52,18 @@ object Boot {
 
     val rootBehavior = Behaviors.setup[Nothing] { context =>
       implicit val executionContext: ExecutionContextExecutor = context.executionContext
+      implicit val classicSystem: akka.actor.ActorSystem      = context.system.toClassic
 
       val elasticFuncs = new ElasticFunctionality(elasticClient, usersIndex, documentsIndex, commentsIndex)
 
+      val httpClient = HttpClient(externalUri)
+
       val mainActor =
-        context.spawn(MainActor(elasticFuncs), "UserRegistryActor")
+        context.spawn(MainActor(elasticFuncs, httpClient), "UserRegistryActor")
       context.watch(mainActor)
 
       val routes = new MainApi(mainActor)(context.system)
-      startHttpServer(routes.mainRoutes, context.system)
+      startHttpServer(routes.mainRoutes)
 
       Behaviors.empty
     }

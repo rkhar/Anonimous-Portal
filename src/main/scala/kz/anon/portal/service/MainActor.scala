@@ -2,9 +2,13 @@ package kz.anon.portal.service
 
 import java.io.InputStream
 import java.util.Base64
+import java.util.UUID.randomUUID
 
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, Behavior}
+import akka.http.scaladsl.model.StatusCodes
+import akka.http.scaladsl.unmarshalling.Unmarshal
+import akka.stream.{ActorMaterializer, Materializer, SystemMaterializer}
 import com.roundeights.hasher.Hasher
 import kz.anon.portal.serializer.ElasticJson
 import kz.anon.portal.service.MainActor._
@@ -34,6 +38,7 @@ object MainActor {
       message: String,
       categories: List[String],
       files: Option[List[Files]],
+      isNumberNeeded: Option[Boolean],
       date: Long
   )
 
@@ -58,8 +63,19 @@ object MainActor {
       categories: List[String],
       files: Option[List[Files]]
   )
-  final case class Comment(docId: String, commentator: String, text: String)
-  final case class CommentToSave(commentID: String, docId: String, commentator: String, text: String, date: Long)
+
+  final case class DocumentToCheck(docId: String, text: String)
+  final case class CheckedDocument(docId: String, result: Boolean)
+  final case class Comment(docId: String, userId: String, publicName: String, text: String)
+
+  final case class CommentToSave(
+      commentID: String,
+      docId: String,
+      commentator: String,
+      publicName: String,
+      text: String,
+      date: Long
+  )
 
   final case class TokenResponse(
       statusCode: Int,
@@ -107,8 +123,13 @@ object MainActor {
   final case class UpdateDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed]) extends Command
   final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed])                  extends Command
 
-  final case class PostComment(docId: String, commentator: String, text: String, replyTo: ActorRef[ActionPerformed])
-      extends Command
+  final case class PostComment(
+      docId: String,
+      commentator: String,
+      publicName: String,
+      text: String,
+      replyTo: ActorRef[ActionPerformed]
+  ) extends Command
   final case class GetComment(commentId: String, replyTo: ActorRef[CommentReceived]) extends Command
 
   final case class GetDocumentComments(docId: String, start: Int, limit: Int, replyTo: ActorRef[CommentsReceived])
@@ -118,16 +139,18 @@ object MainActor {
       extends Command
   final case class ActionPerformed(statusCode: Int, description: String)
 
-  def apply(elasticFuncs: ElasticFunctionality): Behavior[Command] =
-    Behaviors.setup(context => new MainActor(context, elasticFuncs))
+  def apply(elasticFuncs: ElasticFunctionality, httpClient: HttpClient): Behavior[Command] =
+    Behaviors.setup(context => new MainActor(context, elasticFuncs, httpClient))
 }
 
 class MainActor(
     context: ActorContext[Command],
-    elasticFuncs: ElasticFunctionality
+    elasticFuncs: ElasticFunctionality,
+    httpClient: HttpClient
 ) extends AbstractBehavior[Command](context)
     with ElasticJson {
   implicit val executionContext: ExecutionContextExecutor = context.executionContext
+  implicit val materializer: Materializer                 = Materializer(context)
 
   override def onMessage(msg: Command): Behavior[Command] =
     msg match {
@@ -301,13 +324,58 @@ class MainActor(
       case PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, replyTo) =>
         elasticFuncs.ifUserExists(userId).map { res =>
           if (res) {
-            val date = DateTime.now.getMillis
-            elasticFuncs
-              .postDocument(userId, publicName, latLng, center, zoom, message, categories, files, date)
-              .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
-              .recover {
-                case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+            val date  = DateTime.now.getMillis
+            val docId = randomUUID.toString
+            httpClient.checkDocument(DocumentToCheck(docId, message)).flatMap { response =>
+              response.status match {
+                case StatusCodes.OK =>
+                  context.log.info("Received from external service OK")
+                  Unmarshal(response.entity)
+                    .to[CheckedDocument]
+                    .map { checkedDocument =>
+                      elasticFuncs
+                        .postDocument(userId,
+                                      publicName,
+                                      docId,
+                                      latLng,
+                                      center,
+                                      zoom,
+                                      message,
+                                      categories,
+                                      files,
+                                      Some(checkedDocument.result),
+                                      date)
+                        .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
+                        .recover {
+                          case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+                        }
+                    }
+                    .recover {
+                      case _: Exception =>
+                        replyTo ! ActionPerformed(404, "User not found!")
+                    }
+
+                case _ =>
+                  context.log.info("Received from external service Unexpected")
+                  elasticFuncs
+                    .postDocument(userId,
+                                  publicName,
+                                  docId,
+                                  latLng,
+                                  center,
+                                  zoom,
+                                  message,
+                                  categories,
+                                  files,
+                                  None,
+                                  date)
+                    .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
+                    .recover {
+                      case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+                    }
               }
+            }
+
           } else
             replyTo ! ActionPerformed(404, "User not found!")
         }
@@ -324,8 +392,8 @@ class MainActor(
 
         Behaviors.same
 
-      case PostComment(docId, commentator, text, replyTo) =>
-        elasticFuncs.ifUserExists(commentator).map { userRes =>
+      case PostComment(docId, privateName, publicName, text, replyTo) =>
+        elasticFuncs.ifUserExists(privateName).map { userRes =>
           if (userRes) {
             elasticFuncs
               .ifDocExists(docId)
@@ -333,7 +401,7 @@ class MainActor(
                 if (docRes) {
                   val date = DateTime.now.getMillis
                   elasticFuncs
-                    .postComment(docId, commentator, text, date)
+                    .postComment(docId, privateName, publicName, text, date)
                     .map(_ => replyTo ! ActionPerformed(200, "Comment was posted!"))
                     .recover {
                       case _: Exception => replyTo ! ActionPerformed(404, "Comment is invalid!")
@@ -355,7 +423,8 @@ class MainActor(
           .getComment(commentId)
           .map {
             case Some(value) =>
-              replyTo ! CommentReceived("Comment successfully received!", Some(value))
+              val anonComment = value.copy(commentator = "Anonymous")
+              replyTo ! CommentReceived("Comment successfully received!", Some(anonComment))
             case None =>
               replyTo ! CommentReceived("Comment not found!", None)
           }
@@ -370,10 +439,11 @@ class MainActor(
           .getDocumentComments(docId, start, limit)
           .map {
             case Some(value) =>
+              val anonComment = value.map(_.copy(commentator = "Anonymous"))
               elasticFuncs.countDocumentComments(docId).onComplete {
                 case Success(count) =>
                   val pages             = count / (limit - start) + 1
-                  val commentsWithCount = CommentsWithCount(pages, value)
+                  val commentsWithCount = CommentsWithCount(pages, anonComment)
                   replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
                 case Failure(_) =>
                   replyTo ! CommentsReceived("Comments not found!", None)
@@ -392,10 +462,11 @@ class MainActor(
           .getUsersComments(userId, start, limit)
           .map {
             case Some(value) =>
+              val anonComment = value.map(_.copy(commentator = "Anonymous"))
               elasticFuncs.countUsersComments(userId).onComplete {
                 case Success(count) =>
                   val pages             = count / (limit - start) + 1
-                  val commentsWithCount = CommentsWithCount(pages, value)
+                  val commentsWithCount = CommentsWithCount(pages, anonComment)
                   replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
                 case Failure(_) =>
                   replyTo ! CommentsReceived("Comments not found!", None)
