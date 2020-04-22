@@ -86,6 +86,14 @@ class ElasticFunctionality(
     }
   }
 
+  def addPhoneNumber(privateName: String, phoneNumber: String): Future[Response[UpdateResponse]] = {
+    log.info(s"Updating user with privateName: $privateName")
+
+    elasticClient.execute {
+      update(privateName).in(usersIndex).doc("phoneNumber" -> phoneNumber)
+    }
+  }
+
   def deleteUser(id: String): Future[Response[DeleteResponse]] = {
     log.info(s"Deleting user with id: $id")
 
@@ -161,7 +169,8 @@ class ElasticFunctionality(
   ): Future[Response[IndexResponse]] = {
     log.info(s"Posting document to userId: $userId")
 
-    val doc   = DocumentToSave(userId, publicName, docId, latLng, center, zoom, message, categories, files, isNumberNeeded, date)
+    val doc =
+      DocumentToSave(userId, publicName, docId, latLng, center, zoom, message, categories, files, isNumberNeeded, date)
 
     elasticClient.execute {
       indexInto(documentsIndex).doc(doc).id(docId)
@@ -181,7 +190,13 @@ class ElasticFunctionality(
       deleteById(documentsIndex, id)
     }
 
-  def postComment(docId: String, commentator: String, publicName: String, text: String, date: Long): Future[Response[IndexResponse]] = {
+  def postComment(
+      docId: String,
+      commentator: String,
+      publicName: String,
+      text: String,
+      date: Long
+  ): Future[Response[IndexResponse]] = {
     log.info(s"Posting comment from commentator: $commentator")
 
     val commentId = randomUUID.toString

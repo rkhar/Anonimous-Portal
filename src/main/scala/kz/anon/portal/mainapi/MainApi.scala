@@ -30,6 +30,10 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
 
   def login(privateName: String, password: String): Future[TokenResponse] =
     mainActor.ask(Login(privateName, password, _))
+
+  def addPhoneNumber(headers: Map[String, String], privateName: String, phoneNumber: String): Future[ActionPerformed] =
+    mainActor.ask(AddPhoneNumber(headers, privateName, phoneNumber, _))
+
   def getDocument(id: String): Future[DocumentReceived] = mainActor.ask(GetDocument(id, _))
 
   def getAllDocuments(start: Int, limit: Int): Future[DocumentsReceived] =
@@ -47,7 +51,7 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
       message: String,
       categories: List[String],
       files: Option[List[Files]]
-  ): Future[ActionPerformed] =
+  ): Future[CheckedDocumentReceived] =
     mainActor.ask(PostDocument(userId, publicName, latLng, center, zoom, message, categories, files, _))
   //  def updateDocument(id: String, is: InputStream): Future[ActionPerformed] = mainActor.ask(PostDocument(id, is, _))
   def deleteDocument(id: String): Future[ActionPerformed] = mainActor.ask(DeleteDocument(id, _))
@@ -106,6 +110,20 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
           entity(as[User]) { user =>
             onSuccess(login(user.privateName, user.password)) { actionPerformed =>
               complete(StatusCodes.OK, actionPerformed)
+            }
+          }
+        }
+      },
+      pathPrefix("phoneNumber") {
+        put {
+          httpHeaders { headers =>
+            {
+              entity(as[PhoneNumber]) { phoneNumber =>
+                onSuccess(addPhoneNumber(headers, phoneNumber.privateName, phoneNumber.phoneNumber)) {
+                  actionPerformed =>
+                    complete(StatusCodes.OK, actionPerformed)
+                }
+              }
             }
           }
         }
@@ -196,8 +214,9 @@ class MainApi(mainActor: ActorRef[MainActor.Command])(implicit val system: Actor
           },
           post {
             entity(as[Comment]) { comment =>
-              onSuccess(postComment(comment.docId, comment.userId, comment.publicName, comment.text)) { actionPerformed =>
-                complete(StatusCodes.OK, actionPerformed)
+              onSuccess(postComment(comment.docId, comment.userId, comment.publicName, comment.text)) {
+                actionPerformed =>
+                  complete(StatusCodes.OK, actionPerformed)
               }
             }
           }

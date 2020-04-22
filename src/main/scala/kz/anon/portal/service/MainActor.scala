@@ -6,9 +6,9 @@ import java.util.UUID.randomUUID
 
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, Behavior}
-import akka.http.scaladsl.model.StatusCodes
-import akka.http.scaladsl.unmarshalling.Unmarshal
-import akka.stream.{ActorMaterializer, Materializer, SystemMaterializer}
+import akka.http.scaladsl.model.{HttpEntity, StatusCodes}
+import akka.stream.Materializer
+import akka.stream.scaladsl.Sink
 import com.roundeights.hasher.Hasher
 import kz.anon.portal.serializer.ElasticJson
 import kz.anon.portal.service.MainActor._
@@ -17,7 +17,7 @@ import org.json4s.JsonDSL.WithBigDecimal._
 import org.json4s._
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtJson4s}
 
-import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object MainActor {
@@ -25,7 +25,16 @@ object MainActor {
   sealed trait Command
 
   final case class UpdateUserModel(privateName: String, password: String)
-  final case class User(privateName: String, publicName: String = "Anonymous", password: String)
+
+  final case class User(
+      privateName: String,
+      publicName: String = "Anonymous",
+      phoneNumber: Option[String],
+      password: String
+  )
+
+  final case class PhoneNumber(privateName: String, phoneNumber: String)
+
   final case class Files(name: String, content: String)
 
   final case class DocumentToSave(
@@ -88,6 +97,7 @@ object MainActor {
   final case class DocumentReceived(description: String, reply: Option[DocumentToSave])
   final case class CommentReceived(description: String, reply: Option[CommentToSave])
   final case class DocumentsReceived(description: String, reply: Option[DocsWithCount])
+  final case class CheckedDocumentReceived(description: String, result: Option[Boolean])
   final case class CommentsReceived(description: String, reply: Option[CommentsWithCount])
   final case class GetUser(headers: Map[String, String], id: String, replyTo: ActorRef[UserReceived]) extends Command
   final case class CreateUser(user: User, replyTo: ActorRef[TokenResponse])                           extends Command
@@ -102,8 +112,15 @@ object MainActor {
   final case class DeleteUser(headers: Map[String, String], id: String, replyTo: ActorRef[ActionPerformed])
       extends Command
   final case class Login(privateNumber: String, password: String, replyTo: ActorRef[TokenResponse]) extends Command
-  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived])                     extends Command
-  final case class GetAllDocuments(start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived])    extends Command
+
+  final case class AddPhoneNumber(
+      headers: Map[String, String],
+      privateNumber: String,
+      phoneNumber: String,
+      replyTo: ActorRef[ActionPerformed]
+  ) extends Command
+  final case class GetDocument(id: String, replyTo: ActorRef[DocumentReceived])                  extends Command
+  final case class GetAllDocuments(start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived]) extends Command
 
   final case class GetUsersDocuments(id: String, start: Int, limit: Int, replyTo: ActorRef[DocumentsReceived])
       extends Command
@@ -117,9 +134,10 @@ object MainActor {
       message: String,
       categories: List[String],
       files: Option[List[Files]],
-      replyTo: ActorRef[ActionPerformed]
+      replyTo: ActorRef[CheckedDocumentReceived]
   ) extends Command
 
+  final case class CheckDocument(docId: String, text: String, replyTo: ActorRef[CheckedDocument])  extends Command
   final case class UpdateDocument(id: String, is: InputStream, replyTo: ActorRef[ActionPerformed]) extends Command
   final case class DeleteDocument(id: String, replyTo: ActorRef[ActionPerformed])                  extends Command
 
@@ -137,6 +155,7 @@ object MainActor {
 
   final case class GetUserComments(userId: String, start: Int, limit: Int, replyTo: ActorRef[CommentsReceived])
       extends Command
+
   final case class ActionPerformed(statusCode: Int, description: String)
 
   def apply(elasticFuncs: ElasticFunctionality, httpClient: HttpClient): Behavior[Command] =
@@ -223,6 +242,25 @@ class MainActor(
 
         Behaviors.same
 
+      case AddPhoneNumber(headers, privateNumber, phoneNumber, replyTo) =>
+        if (checkToken(headers)) {
+          elasticFuncs.ifUserExists(privateNumber).map { res =>
+            if (res) {
+              elasticFuncs
+                .addPhoneNumber(privateNumber, phoneNumber)
+                .map(_ => replyTo ! ActionPerformed(200, "Phone number was successfully added!"))
+                .recover {
+                  case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+                }
+            } else
+              replyTo ! ActionPerformed(404, "User not found!")
+          }
+        } else {
+          replyTo ! ActionPerformed(403, "Invalid Token!")
+        }
+
+        Behaviors.same
+
       case DeleteUser(headers, id, replyTo) =>
         if (checkToken(headers)) {
           elasticFuncs
@@ -283,7 +321,7 @@ class MainActor(
             case Some(value) =>
               elasticFuncs.countAllDocuments.onComplete {
                 case Success(count) =>
-                  val pages         = count / (limit - start) + 1
+                  val pages         = count / limit + 1
                   val docsWithCount = DocsWithCount(pages, value)
                   replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
                 case Failure(_) =>
@@ -306,7 +344,7 @@ class MainActor(
             case Some(value) =>
               elasticFuncs.countUsersDocuments(id).onComplete {
                 case Success(count) =>
-                  val pages         = count / (limit - start) + 1
+                  val pages         = count / limit + 1
                   val docsWithCount = DocsWithCount(pages, value)
                   replyTo ! DocumentsReceived("Documents successfully received!", Some(docsWithCount))
                 case Failure(_) =>
@@ -326,13 +364,12 @@ class MainActor(
           if (res) {
             val date  = DateTime.now.getMillis
             val docId = randomUUID.toString
-            httpClient.checkDocument(DocumentToCheck(docId, message)).flatMap { response =>
-              response.status match {
-                case StatusCodes.OK =>
-                  context.log.info("Received from external service OK")
-                  Unmarshal(response.entity)
-                    .to[CheckedDocument]
-                    .map { checkedDocument =>
+            httpClient.checkDocument(DocumentToCheck(docId, message)).onComplete {
+              case Success(response) =>
+                response.status match {
+                  case StatusCodes.OK =>
+                    entityAsString(response.entity).map { str =>
+                      val checkedDocument = org.json4s.native.Serialization.read[CheckedDocument](str)
                       elasticFuncs
                         .postDocument(userId,
                                       publicName,
@@ -345,39 +382,52 @@ class MainActor(
                                       files,
                                       Some(checkedDocument.result),
                                       date)
-                        .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
+                        .map(
+                          _ => replyTo ! CheckedDocumentReceived("Document was posted!", Some(checkedDocument.result))
+                        )
                         .recover {
-                          case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
+                          case _: Exception => replyTo ! CheckedDocumentReceived("Failed to post", None)
                         }
-                    }
-                    .recover {
+                    }.recover {
                       case _: Exception =>
-                        replyTo ! ActionPerformed(404, "User not found!")
+                        replyTo ! CheckedDocumentReceived("Failed to extract JSON!", None)
                     }
 
-                case _ =>
-                  context.log.info("Received from external service Unexpected")
-                  elasticFuncs
-                    .postDocument(userId,
-                                  publicName,
-                                  docId,
-                                  latLng,
-                                  center,
-                                  zoom,
-                                  message,
-                                  categories,
-                                  files,
-                                  None,
-                                  date)
-                    .map(_ => replyTo ! ActionPerformed(200, "Document was posted!"))
-                    .recover {
-                      case _: Exception => replyTo ! ActionPerformed(404, "User not found!")
-                    }
-              }
+                  case _ =>
+                    elasticFuncs
+                      .postDocument(userId,
+                                    publicName,
+                                    docId,
+                                    latLng,
+                                    center,
+                                    zoom,
+                                    message,
+                                    categories,
+                                    files,
+                                    None,
+                                    date)
+                      .map(_ => replyTo ! CheckedDocumentReceived("Document was posted without verification!", None))
+                      .recover {
+                        case _: Exception => replyTo ! CheckedDocumentReceived("Failed to post", None)
+                      }
+                }
+              case Failure(_) =>
+                elasticFuncs
+                  .postDocument(userId, publicName, docId, latLng, center, zoom, message, categories, files, None, date)
+                  .map(
+                    _ =>
+                      replyTo ! CheckedDocumentReceived(
+                            "Server for verification responded with a failure. Anyway document was posted!",
+                            None
+                          )
+                  )
+                  .recover {
+                    case _: Exception => replyTo ! CheckedDocumentReceived("Failed to post", None)
+                  }
             }
 
           } else
-            replyTo ! ActionPerformed(404, "User not found!")
+            replyTo ! CheckedDocumentReceived("User not found!", None)
         }
 
         Behaviors.same
@@ -442,7 +492,7 @@ class MainActor(
               val anonComment = value.map(_.copy(commentator = "Anonymous"))
               elasticFuncs.countDocumentComments(docId).onComplete {
                 case Success(count) =>
-                  val pages             = count / (limit - start) + 1
+                  val pages             = count / limit + 1
                   val commentsWithCount = CommentsWithCount(pages, anonComment)
                   replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
                 case Failure(_) =>
@@ -465,7 +515,7 @@ class MainActor(
               val anonComment = value.map(_.copy(commentator = "Anonymous"))
               elasticFuncs.countUsersComments(userId).onComplete {
                 case Success(count) =>
-                  val pages             = count / (limit - start) + 1
+                  val pages             = count / limit + 1
                   val commentsWithCount = CommentsWithCount(pages, anonComment)
                   replyTo ! CommentsReceived("Comments successfully received!", Some(commentsWithCount))
                 case Failure(_) =>
@@ -501,4 +551,8 @@ class MainActor(
     Jwt.decode(token, key, Seq(algorithm)).isSuccess
   }
 
+  private def entityAsString(entity: HttpEntity): Future[String] =
+    entity.dataBytes
+      .map(x => x.decodeString(entity.contentType.charsetOption.get.nioCharset()))
+      .runWith(Sink.head)
 }
