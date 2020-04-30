@@ -201,7 +201,7 @@ class MainActor(
           .map { res =>
             if (res) replyTo ! TokenResponse(201, "User already exists")
             else {
-              val hashedUser = user.copy(publicName = Hasher(user.privateName + DateTime.now.toString).sha256.hash)
+              val hashedUser = user.copy(publicName = Hasher(user.privateName + DateTime.now.toString).sha512.hash)
               elasticFuncs
                 .createUser(hashedUser)
                 .map(
@@ -226,7 +226,7 @@ class MainActor(
         if (checkToken(headers)) {
           elasticFuncs.ifUserExists(id).map { res =>
             if (res) {
-              val hashedPassword = Hasher(password).sha256.hash
+              val hashedPassword = Hasher(password).sha512.hash
               elasticFuncs
                 .updateUser(id, hashedPassword)
                 .map(_ => replyTo ! ActionPerformed(200, "User successfully updated!"))
@@ -276,7 +276,7 @@ class MainActor(
         Behaviors.same
 
       case Login(privateName, password, replyTo) =>
-        val userWithHashedPass = Hasher(password).sha256.hash
+        val userWithHashedPass = Hasher(password).sha512.hash
 
         elasticFuncs
           .getUserByPrivateName(privateName)

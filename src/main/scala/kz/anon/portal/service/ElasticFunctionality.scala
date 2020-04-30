@@ -71,7 +71,7 @@ class ElasticFunctionality(
   def createUser(user: User): Future[Response[IndexResponse]] = {
     log.info(s"Creating user with id: ${user.privateName}")
 
-    val userWithHashedPass = user.copy(password = Hasher(user.password).sha256)
+    val userWithHashedPass = user.copy(password = Hasher(user.password).sha512)
 
     elasticClient.execute {
       indexInto(usersIndex).doc(userWithHashedPass).id(user.privateName)
