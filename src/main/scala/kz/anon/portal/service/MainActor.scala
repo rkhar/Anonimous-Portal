@@ -158,14 +158,15 @@ object MainActor {
 
   final case class ActionPerformed(statusCode: Int, description: String)
 
-  def apply(elasticFuncs: ElasticFunctionality, httpClient: HttpClient): Behavior[Command] =
-    Behaviors.setup(context => new MainActor(context, elasticFuncs, httpClient))
+  def apply(elasticFuncs: ElasticFunctionality, httpClient: HttpClient, secretKey: String): Behavior[Command] =
+    Behaviors.setup(context => new MainActor(context, elasticFuncs, httpClient, secretKey))
 }
 
 class MainActor(
     context: ActorContext[Command],
     elasticFuncs: ElasticFunctionality,
-    httpClient: HttpClient
+    httpClient: HttpClient,
+    secretKey: String
 ) extends AbstractBehavior[Command](context)
     with ElasticJson {
   implicit val executionContext: ExecutionContextExecutor = context.executionContext
@@ -538,7 +539,7 @@ class MainActor(
 
   private def tokenGenerate(privateName: String, password: String): String = {
     val claim     = JObject(("privateName", privateName), ("password", password))
-    val key       = "secretKey"
+    val key       = secretKey
     val algorithm = JwtAlgorithm.HS256
     JwtJson4s.encode(claim, key, algorithm)
   }
@@ -546,7 +547,7 @@ class MainActor(
   def checkToken(headers: Map[String, String]): Boolean = {
     val bearerToken = headers.getOrElse("Authorization", "")
     val token       = if (bearerToken.nonEmpty) bearerToken.split(" ")(1) else ""
-    val key         = "secretKey"
+    val key         = secretKey
     val algorithm   = JwtAlgorithm.HS256
     Jwt.decode(token, key, Seq(algorithm)).isSuccess
   }

@@ -43,6 +43,7 @@ object Boot {
     val elasticHosts: String   = config.getString("elastic.hosts")
     val elasticPorts: String   = config.getString("elastic.ports")
     val externalUri: String    = config.getString("uri")
+    val secretKey: String      = config.getString("secretKey")
     val elasticClient: ElasticClient = ElasticClient(
       JavaClient(ElasticProperties(s"http://$elasticHosts:$elasticPorts"))
     )
@@ -59,7 +60,7 @@ object Boot {
       val httpClient = HttpClient(externalUri)
 
       val mainActor =
-        context.spawn(MainActor(elasticFuncs, httpClient), "UserRegistryActor")
+        context.spawn(MainActor(elasticFuncs, httpClient, secretKey), "UserRegistryActor")
       context.watch(mainActor)
 
       val routes = new MainApi(mainActor)(context.system)
